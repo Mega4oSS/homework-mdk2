@@ -73,6 +73,10 @@ jobs:
         mkdir -p ~/.buildozer/android/platform/android-sdk/cmdline-tools
         unzip -q commandlinetools.zip -d ~/.buildozer/android/platform/android-sdk/cmdline-tools
         mv ~/.buildozer/android/platform/android-sdk/cmdline-tools/cmdline-tools ~/.buildozer/android/platform/android-sdk/cmdline-tools/latest
+        
+        # Create tools directory structure for buildozer compatibility
+        mkdir -p ~/.buildozer/android/platform/android-sdk/tools/bin
+        ln -s ~/.buildozer/android/platform/android-sdk/cmdline-tools/latest/bin/sdkmanager ~/.buildozer/android/platform/android-sdk/tools/bin/sdkmanager
 
     - name: Install SDK components
       run: |
