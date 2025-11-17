@@ -2,40 +2,35 @@ name: Build Kivy APK
 
 on:
   push:
-    branches:
-      - main
+    branches: [ master ]   # поменяй на свою ветку, если нужно
+  workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 90
 
     steps:
-    - name: Checkout repo
-      uses: actions/checkout@v5
+      - name: Checkout repo
+        uses: actions/checkout@v5
 
-    - name: Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: '3.11'
+      - name: Build APK with Buildozer action
+        uses: digreatbrian/buildozer-action@v2
+        with:
+          python-version: '3.11'                # можно поменять
+          buildozer-cmd: 'buildozer -v android debug'  # или release
 
-    - name: Install dependencies
-      run: |
-        sudo apt update
-        sudo apt install -y python3-pip git zip unzip openjdk-11-jdk
-        pip install --upgrade cython buildozer
+      - name: Show bin folder (for debug)
+        if: always()
+        run: |
+          echo "===== LS bin (recursive) ====="
+          ls -laR bin || echo "bin not found"
 
-    - name: Build APK
-      run: |
-        buildozer android debug
-
-    - name: Upload APK
-      uses: actions/upload-artifact@v4
-      with:
-        name: my-kivy-apk
-        path: bin/*.apk
-
-    - name: Upload APK
-      uses: actions/upload-artifact@v4
-      with:
-        name: my-kivy-apk       # имя артефакта
-        path: bin/**/*.apk      # путь к APK, учитывая вложенные папки
+      - name: Upload APK artifact (always run)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: my-kivy-apk
+          path: |
+            ./bin/**/*.apk
+            ./bin/*.apk
