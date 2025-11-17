@@ -48,51 +48,29 @@ jobs:
           pkg-config \
           zip \
           unzip \
-          wget \
-          cmake
+          wget
 
     - name: Set JAVA_HOME
       run: |
         echo "JAVA_HOME=/usr/lib/jvm/java-11-openjdk-amd64" >> $GITHUB_ENV
-        echo "/usr/lib/jvm/java-11-openjdk-amd64/bin" >> $GITHUB_PATH
 
-    - name: Install Python dependencies
+    - name: Install Buildozer
       run: |
         pip install --upgrade pip
         pip install --upgrade setuptools wheel
-        pip install cython==0.29.33
         pip install buildozer==1.5.0
-        pip install virtualenv
+        pip install cython==0.29.33
 
-    - name: Make buildozer directory
-      run: mkdir -p ~/.buildozer
-
-    - name: Download and setup Android SDK
-      run: |
-        wget https://dl.google.com/android/repository/commandlinetools-linux-9477386_latest.zip -O commandlinetools.zip
-        mkdir -p ~/.buildozer/android/platform/android-sdk/cmdline-tools
-        unzip -q commandlinetools.zip -d ~/.buildozer/android/platform/android-sdk/cmdline-tools
-        mv ~/.buildozer/android/platform/android-sdk/cmdline-tools/cmdline-tools ~/.buildozer/android/platform/android-sdk/cmdline-tools/latest
-        
-        # Create tools directory structure for buildozer compatibility
-        mkdir -p ~/.buildozer/android/platform/android-sdk/tools/bin
-        ln -s ~/.buildozer/android/platform/android-sdk/cmdline-tools/latest/bin/sdkmanager ~/.buildozer/android/platform/android-sdk/tools/bin/sdkmanager
-
-    - name: Install SDK components
-      run: |
-        export ANDROID_SDK_ROOT=$HOME/.buildozer/android/platform/android-sdk
-        echo y | $ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager --sdk_root=$ANDROID_SDK_ROOT "platform-tools" "platforms;android-31" "build-tools;30.0.3"
-        echo y | $ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager --sdk_root=$ANDROID_SDK_ROOT --licenses
-
-    - name: Accept Android SDK licenses
-      run: |
-        mkdir -p ~/.buildozer/android/platform/android-sdk/licenses
-        echo "24333f8a63b6825ea9c5514f83c2829b004d1fee" > ~/.buildozer/android/platform/android-sdk/licenses/android-sdk-license
-        echo "d56f5187479451eabf01fb78af6dfcb131a6481e" >> ~/.buildozer/android/platform/android-sdk/licenses/android-sdk-license
+    - name: Cache Buildozer
+      uses: actions/cache@v3
+      with:
+        path: |
+          ~/.buildozer
+        key: ${{ runner.os }}-buildozer-${{ hashFiles('buildozer.spec') }}
 
     - name: Build with Buildozer
       run: |
-        yes | buildozer -v android debug || buildozer -v android debug
+        buildozer android debug
 
     - name: Upload APK
       uses: actions/upload-artifact@v4
@@ -101,7 +79,7 @@ jobs:
         path: bin/*.apk
         if-no-files-found: error
 
-    - name: Create Release (on tag push)
+    - name: Create Release
       if: startsWith(github.ref, 'refs/tags/')
       uses: softprops/action-gh-release@v1
       with:
