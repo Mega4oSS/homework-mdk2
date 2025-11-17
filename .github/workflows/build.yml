@@ -19,7 +19,9 @@ jobs:
 
     - name: Build with Buildozer
       run: |
-        buildozer android debug
+        buildozer -y android debug
+      env:
+        BUILDOZER_WARN_ON_ROOT: 0
 
     - name: Upload APK
       uses: actions/upload-artifact@v4
