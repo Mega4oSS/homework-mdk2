@@ -45,10 +45,13 @@ jobs:
           autoconf \
           automake \
           libtool \
+          libtool-bin \
           pkg-config \
           zip \
           unzip \
-          wget
+          wget \
+          m4 \
+          texinfo
 
     - name: Set JAVA_HOME
       run: |
