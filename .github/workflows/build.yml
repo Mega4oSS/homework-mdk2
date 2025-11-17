@@ -10,66 +10,12 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    container:
+      image: kivy/buildozer:latest
 
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
-
-    - name: Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: '3.9'
-
-    - name: Install system dependencies
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y \
-          build-essential \
-          git \
-          ffmpeg \
-          libsdl2-dev \
-          libsdl2-image-dev \
-          libsdl2-mixer-dev \
-          libsdl2-ttf-dev \
-          libportmidi-dev \
-          libswscale-dev \
-          libavformat-dev \
-          libavcodec-dev \
-          zlib1g-dev \
-          libgstreamer1.0 \
-          gstreamer1.0-plugins-base \
-          gstreamer1.0-plugins-good \
-          libssl-dev \
-          libffi-dev \
-          openjdk-11-jdk \
-          autoconf \
-          automake \
-          libtool \
-          libtool-bin \
-          pkg-config \
-          zip \
-          unzip \
-          wget \
-          m4 \
-          texinfo
-
-    - name: Set JAVA_HOME
-      run: |
-        echo "JAVA_HOME=/usr/lib/jvm/java-11-openjdk-amd64" >> $GITHUB_ENV
-
-    - name: Install Buildozer
-      run: |
-        pip install --upgrade pip
-        pip install --upgrade setuptools wheel
-        pip install buildozer==1.5.0
-        pip install cython==0.29.33
-
-    - name: Cache Buildozer
-      uses: actions/cache@v3
-      with:
-        path: |
-          ~/.buildozer
-        key: ${{ runner.os }}-buildozer-${{ hashFiles('buildozer.spec') }}
 
     - name: Build with Buildozer
       run: |
