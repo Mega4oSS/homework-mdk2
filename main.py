@@ -17,7 +17,6 @@ from kivy.clock import Clock
 from kivy.animation import Animation
 
 
-Window.size = (360, 640)
 Window.clearcolor = (1, 0, 1, 1)
 
 class RoundedBtn(Button):
