@@ -19,7 +19,7 @@ jobs:
 
     - name: Build with Buildozer
       run: |
-        buildozer -v -y android debug --no-compile-python
+        buildozer -y android debug
       env:
         BUILDOZER_WARN_ON_ROOT: 0
 

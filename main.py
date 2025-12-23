@@ -1,3 +1,5 @@
+import datetime
+
 from kivy import Config
 from kivy.app import App
 from kivy.core.text import LabelBase
@@ -8,6 +10,7 @@ from kivy.uix.button import Button
 from kivy.uix.floatlayout import FloatLayout
 from kivy.uix.label import Label
 from kivy.uix.scrollview import ScrollView
+from kivy.uix.textinput import TextInput
 from kivy.uix.widget import Widget
 from kivy.core.window import Window
 from kivy.graphics import Color, RoundedRectangle, Rectangle, Line
@@ -15,7 +18,11 @@ from kivy.graphics.texture import Texture
 from kivy.metrics import dp
 from kivy.clock import Clock
 from kivy.animation import Animation
+from datetime import datetime
+from kivymd.app import MDApp
+from kivymd.uix.pickers import MDTimePicker, MDDatePicker
 
+import taskManager
 
 Window.clearcolor = (1, 0, 1, 1)
 
@@ -131,9 +138,23 @@ class BottomBar(BoxLayout):
         self._bg.pos = self.pos
         self._bg.size = self.size
 
+def format_duration(seconds: int) -> str:
+    hours = seconds // 3600
+    minutes = (seconds % 3600) // 60
+    parts = []
+    if hours > 0:
+        parts.append(f"{hours}ч")
+    if minutes > 0 or hours == 0:
+        parts.append(f"{minutes}м")
+    return " ".join(parts)
+
+def is_same_day(ts1: int, ts2: int) -> bool:
+    d1 = datetime.fromtimestamp(ts1)
+    d2 = datetime.fromtimestamp(ts2)
+    return d1.date() == d2.date()
 
 class TaskCard(BoxLayout):
-    def __init__(self, title, project, description, start_time, end_time, started=False):
+    def __init__(self, title, project, description, start_time, end_time, started=False, completed_time=None, task_id=None):
         super().__init__(orientation='vertical', size_hint_y=None, spacing=dp(10))
         self._radius = [18]
         self._top_h = dp(52)
@@ -144,9 +165,9 @@ class TaskCard(BoxLayout):
         self._start_time = start_time
         self._end_time = end_time
         self._started = started
-
+        self._task_id = task_id
         self._state = 'active' if self._started else 'next'
-        self._completed_time = None
+        self._completed_time = completed_time
 
         with self.canvas.before:
             Color(0, 0, 0, 0.06)
@@ -213,8 +234,33 @@ class TaskCard(BoxLayout):
                                  font_size='20sp')
         def _on_finish(instance):
             from datetime import datetime
-            now = datetime.now().strftime('%Y-%m-%d %H:%M')
-            self.mark_completed(now)
+            now_ts = int(datetime.now().timestamp())
+            task = taskManager.get_tasks()[self._task_id]
+            deadline_ts = task.get("end_time")
+
+            if deadline_ts is not None and now_ts > deadline_ts:
+                overdue_sec = now_ts - deadline_ts
+                self.mark_completed_overdue(
+                    datetime.fromtimestamp(now_ts).strftime('%Y-%m-%d %H:%M'),
+                    overdue_sec
+                )
+                taskManager.edit_task(
+                    self._task_id,
+                    state="completed_overdue",
+                    completed_time=now_ts
+                )
+            else:
+                self.mark_completed(
+                    datetime.fromtimestamp(now_ts).strftime('%Y-%m-%d %H:%M')
+                )
+                taskManager.edit_task(
+                    self._task_id,
+                    state="completed",
+                    completed_time=now_ts
+                )
+            taskManager.edit_task(self._task_id, state="completed")
+            MDApp.get_running_app().refresh_tasks()
+
         self._check.bind(on_release=_on_finish)
 
         bot.add_widget(self._time)
@@ -239,15 +285,50 @@ class TaskCard(BoxLayout):
         self._layout()
 
     def _set_time_text(self):
-        if self._state == 'active':
-            self._time.text = f'До конца {self._end_time}'
-        elif self._state == 'next':
-            self._time.text = f'До начала {self._start_time}'
-        elif self._state == 'completed':
-            if self._completed_time:
-                self._time.text = f'Завершено {self._completed_time}'
+            all_tasks = taskManager.get_tasks() or []
+            self._time.text = self.get_task_time_display(all_tasks[self._task_id])
+
+    def get_task_time_display(self, task: dict) -> str:
+        now_ts = int(datetime.now().timestamp())
+
+        if task["state"] in ("completed", "completed_overdue"):
+            completed_ts = task.get("completed_time")
+            if not completed_ts:
+                return "-"
+            display = datetime.fromtimestamp(completed_ts).strftime("%d.%m %H:%M")
+            if task["state"] == "completed_overdue":
+                overdue_sec = completed_ts - task["end_time"]
+                if overdue_sec > 0:
+                    display += f" просрочено на {format_duration(overdue_sec)}"
+            return display
+
+        elif task["state"] == "active":
+            deadline_ts = task["end_time"]
+            delta = deadline_ts - now_ts
+            if delta < 0:
+                return f"Просрочено на {format_duration(now_ts - deadline_ts)}"
+            if is_same_day(now_ts, deadline_ts):
+                return format_duration(delta)
             else:
-                self._time.text = f'Завершено {self._end_time}'
+                return datetime.fromtimestamp(deadline_ts).strftime("%d.%m %H:%M")
+
+
+        elif task["state"] == "next":
+            start_ts = task["start_time"]
+            if is_same_day(now_ts, start_ts):
+                delta = start_ts - now_ts
+                if delta > 0:
+                    return f"должно начаться {format_duration(delta)}"
+                elif delta < 0:
+                    return f"должно было начаться {format_duration(-delta)} назад"
+                else:
+                    return "Сейчас"
+
+            else:
+
+                return datetime.fromtimestamp(start_ts).strftime("%d.%m %H:%M")
+
+        return "-"
 
     def _layout(self, *a):
         pad = dp(28)
@@ -284,6 +365,15 @@ class TaskCard(BoxLayout):
     def mark_next(self):
         self.set_state('next')
 
+    def mark_completed_overdue(self, completed_time=None, overdue_time=None):
+        if completed_time is None:
+            from datetime import datetime
+            completed_time = datetime.now().strftime('%Y-%m-%d %H:%M')
+
+        self._completed_time = completed_time
+        self._overdue_time = overdue_time
+        self.set_state('completed_overdue')
+
     def mark_completed(self, completed_time=None):
         if completed_time is None:
             from datetime import datetime
@@ -298,7 +388,8 @@ class TaskCard(BoxLayout):
             self._top._col.rgba = (0.6, 0.6, 0.6, 1)
         elif self._state == 'completed':
             self._top._col.rgba = (0.25, 0.75, 0.4, 1)
-
+        elif self._state == 'completed_overdue':
+            self._top._col.rgba = (0.25, 0.75, 0.4, 1)
         self._set_time_text()
 
         if self._state == 'active':
@@ -325,12 +416,7 @@ class ContentPanel(BoxLayout):
             self._bg = Rectangle(pos=self.pos, size=self.size)
         self.bind(pos=self._up, size=self._up)
 
-        self.scroll = ScrollView(
-            size_hint=(1, 1),
-            bar_width=dp(4),
-            do_scroll_x=False
-        )
-
+        self.scroll = ScrollView(size_hint=(1, 1), bar_width=dp(4), do_scroll_x=False)
         self.container = BoxLayout(
             orientation='vertical',
             size_hint_x=1,
@@ -340,44 +426,63 @@ class ContentPanel(BoxLayout):
         )
         self.container.bind(minimum_height=self.container.setter('height'))
 
-        self.prev_card = TaskCard(
-            title='Составить диз доки',
-            project='MAX Core',
-            description=('Достаточно дллнное описание диз доков для тестов '
-                         'Карточка корректно растягивается по высоте и сохраняет аккуратные отступы.'),
-            start_time='2ч 15м',
-            end_time='3ч 40м',
-            started=False
-        )
-        self.prev_card.size_hint_y = None
-        self.prev_card.mark_completed('Сегодня 11:20')
+        all_tasks = taskManager.get_tasks() or []
 
-        self.card = TaskCard(
-            title='Сверстать главный экран',
-            project='MAX Core',
-            description=('Очень длинное описание задачи, которое может быть сколько угодно большим. '
-                         'Карточка корректно растягивается по высоте и сохраняет аккуратные отступы.'),
-            start_time='2ч 15м',
-            end_time='3ч 40м',
-            started=False
-        )
-        self.card.size_hint_y = None
-        self.card.mark_active()
+        center_idx = None
+        prev_idx = None
+        next_idx = None
 
-        self.next_card = TaskCard(
-            title='Подключить аналитику',
-            project='MAX Core',
-            description='Подключение событий и проверка корректности отправки данных.',
-            start_time='1ч 10м',
-            end_time='1ч 10м',
-            started=True
-        )
-        self.next_card.size_hint_y = None
-        self.next_card.mark_next()
+        if all_tasks:
+            for i, t in enumerate(all_tasks):
+                if t.get("state") == "active":
+                    center_idx = i
+                    break
 
-        for c in (self.prev_card, self.card, self.next_card):
-            c.bind(height=lambda *a: setattr(self.container, 'height', self.container.minimum_height))
-            self.container.add_widget(c)
+            if center_idx is None:
+                next_indices = [i for i, t in enumerate(all_tasks) if t.get("state") == "next"]
+                if next_indices:
+                    center_idx = next_indices[0]
+                    prev_idx = center_idx - 1 if center_idx - 1 >= 0 else None
+                    next_idx = next_indices[1] if len(next_indices) > 1 else None
+                else:
+                    center_idx = 0
+            else:
+                prev_idx = center_idx - 1 if center_idx - 1 >= 0 else None
+                next_idx = center_idx + 1 if center_idx + 1 < len(all_tasks) else None
+
+        cards_to_add = []
+        if all_tasks:
+            if prev_idx is not None:
+                cards_to_add.append(("prev", all_tasks[prev_idx], prev_idx))
+            cards_to_add.append(("center", all_tasks[center_idx], center_idx))
+            if next_idx is not None:
+                cards_to_add.append(("next", all_tasks[next_idx], next_idx))
+
+        for role, task, idx in cards_to_add:
+            card = TaskCard(
+                title=task.get("title", "Без названия"),
+                project=task.get("project", ""),
+                description=task.get("description", ""),
+                start_time=task.get("start_time", 0),
+                end_time=task.get("end_time", 0),
+                started=task.get("started", False),
+                task_id=idx
+            )
+            state = task.get("state")
+            if state == "completed":
+                card.mark_completed(task.get("completed_time"))
+            elif state == "completed_overdue":
+                completed_time = task.get("completed_time")
+                end_time = task.get("end_time")
+                overdue = (completed_time - end_time) if (completed_time and end_time) else None
+                card.mark_completed_overdue(completed_time, overdue)
+            elif state == "active":
+                card.mark_active()
+            elif state == "next":
+                card.mark_next()
+
+            card.bind(height=lambda *a: setattr(self.container, 'height', self.container.minimum_height))
+            self.container.add_widget(card)
 
         self.scroll.add_widget(self.container)
         self.add_widget(self.scroll)
@@ -386,9 +491,68 @@ class ContentPanel(BoxLayout):
         self._bg.pos = self.pos
         self._bg.size = self.size
 
+    def refresh(self):
+        self.container.clear_widgets()
+        all_tasks = taskManager.get_tasks() or []
+
+        center_idx = None
+        prev_idx = None
+        next_idx = None
+
+        if all_tasks:
+            for i, t in enumerate(all_tasks):
+                if t.get("state") == "active":
+                    center_idx = i
+                    break
+
+            if center_idx is None:
+                next_indices = [i for i, t in enumerate(all_tasks) if t.get("state") == "next"]
+                if next_indices:
+                    center_idx = next_indices[0]
+                    prev_idx = center_idx - 1 if center_idx - 1 >= 0 else None
+                    next_idx = next_indices[1] if len(next_indices) > 1 else None
+                else:
+                    center_idx = 0
+            else:
+                prev_idx = center_idx - 1 if center_idx - 1 >= 0 else None
+                next_idx = center_idx + 1 if center_idx + 1 < len(all_tasks) else None
+
+        cards_to_add = []
+        if all_tasks:
+            if prev_idx is not None:
+                cards_to_add.append(("prev", all_tasks[prev_idx], prev_idx))
+            cards_to_add.append(("center", all_tasks[center_idx], center_idx))
+            if next_idx is not None:
+                cards_to_add.append(("next", all_tasks[next_idx], next_idx))
+
+        for role, task, idx in cards_to_add:
+            card = TaskCard(
+                title=task.get("title", "Без названия"),
+                project=task.get("project", ""),
+                description=task.get("description", ""),
+                start_time=task.get("start_time", 0),
+                end_time=task.get("end_time", 0),
+                started=task.get("started", False),
+                task_id=idx
+            )
+            state = task.get("state")
+            if state == "completed":
+                card.mark_completed(task.get("completed_time"))
+            elif state == "completed_overdue":
+                completed_time = task.get("completed_time")
+                end_time = task.get("end_time")
+                overdue = (completed_time - end_time) if (completed_time and end_time) else None
+                card.mark_completed_overdue(completed_time, overdue)
+            elif state == "active":
+                card.mark_active()
+            elif state == "next":
+                card.mark_next()
+
+            card.bind(height=lambda *a: setattr(self.container, 'height', self.container.minimum_height))
+            self.container.add_widget(card)
 
 class STaskCard(FloatLayout):
-    def __init__(self, title, project, description, start_time, end_time, started=False, overdue_time=None):
+    def __init__(self, title, project, description, start_time, end_time, completed_time=None, started=False, state="", task_id=0):
         super().__init__(size_hint_y=None)
         self._radius = [18]
         self._compact_h = dp(56)
@@ -398,9 +562,13 @@ class STaskCard(FloatLayout):
         self._start_time = start_time
         self._end_time = end_time
         self._started = started
-        self._overdue_time = overdue_time
-
-        self._state = 'active' if self._started else 'next'
+        self._task_id = task_id
+        if completed_time is not None and end_time is not None:
+            self._overdue_time = completed_time - end_time
+        else:
+            self._overdue_time = None
+        self._completed_time = completed_time
+        self._state = state
         self._completed_time = None
         self._expanded = False
 
@@ -437,7 +605,7 @@ class STaskCard(FloatLayout):
         left_anchor.size_hint_x = 1
 
         self.time_lbl = Label(text='', color=(1, 1, 1, 0.95), halign='right', valign='middle',
-                              size_hint_x=None, width=dp(80))
+                              size_hint_x=None, width=dp(100))
         self.time_lbl.bind(size=self.time_lbl.setter('text_size'))
 
         self.compact_view.add_widget(left_anchor)
@@ -489,20 +657,44 @@ class STaskCard(FloatLayout):
         self._layout()
 
     def _set_time_text(self):
-        if self._state == 'active':
-            self.time_lbl.text = self._end_time
-        elif self._state == 'next':
-            self.time_lbl.text = self._start_time
-        elif self._state == 'completed':
-            if self._completed_time:
-                self.time_lbl.text = self._completed_time
-            else:
-                self.time_lbl.text = self._end_time
-        elif self._state == 'completed_overdue':
-            text = self._completed_time if self._completed_time else self._end_time
-            if self._overdue_time:
-                text += f'\n+{self._overdue_time}'
+        import time
+        from datetime import datetime
+
+        task = taskManager.get_tasks()[self._task_id]
+
+        def format_duration(seconds: int) -> str:
+            hours, rem = divmod(seconds, 3600)
+            minutes, _ = divmod(rem, 60)
+            if hours > 0:
+                return f"{hours}ч {minutes}м"
+            return f"{minutes}м"
+
+        now_ts = int(time.time())
+
+        state = task.get("state")
+        start_ts = task.get("start_time")
+        end_ts = task.get("end_time")
+        completed_ts = task.get("completed_time")
+        overdue_sec = max(0, completed_ts - end_ts) if completed_ts and end_ts else None
+        overdue_sec_two = max(0, now_ts - end_ts) if now_ts and end_ts else None
+
+        if state in ("completed", "completed_overdue"):
+            text = datetime.fromtimestamp(completed_ts).strftime(
+                "%d.%m %H:%M") if completed_ts else datetime.fromtimestamp(end_ts).strftime("%d.%m %H:%M")
+            if state == "completed_overdue" and overdue_sec:
+                text += f"\n+{format_duration(overdue_sec)}"
             self.time_lbl.text = text
+            return
+
+        if state == "active":
+            delta = end_ts - now_ts
+            self.time_lbl.text = format_duration(delta) if delta > 0 else f"Просрочено на {format_duration(overdue_sec_two)}"
+            return
+
+        if state == "next":
+            delta = start_ts - now_ts
+            self.time_lbl.text = format_duration(delta) if delta > 0 else "Сейчас"
+            return
 
     def _layout(self, *a):
         if self.width == 100:
@@ -586,7 +778,7 @@ class STaskCard(FloatLayout):
         elif self._state == 'completed':
             self.compact_view._col.rgba = (0.4, 0.7, 0.5, 1)
         elif self._state == 'completed_overdue':
-            self.compact_view._col.rgba = (0.6, 0.6, 0.4, 1)
+            self.compact_view._col.rgba = (0.6, 0.3, 0.4, 1)
 
         self._set_time_text()
 
@@ -661,7 +853,6 @@ class STaskCard(FloatLayout):
         self.edit_btn.opacity = 0
         self.delete_btn.opacity = 0
         self._layout()
-        # Сброс флага свайпа: дальше клики будут обычными
         self._is_swiping = False
 
     def _on_swipe_open(self, final_offset):
@@ -683,17 +874,14 @@ class STaskCard(FloatLayout):
 
 
 def add_debug_border(widget, border_color=(1, 0, 0, 1), line_width=2):
-    """Добавляет контур для отладки к виджету"""
-    with widget.canvas.after:  # Используем canvas.after чтобы контур был поверх
+    with widget.canvas.after:
         widget.debug_color = Color(*border_color)
-        # Создаем контур (линию) вместо закрашенного прямоугольника
         widget.debug_rect = Line(
             rectangle=(widget.x, widget.y, widget.width, widget.height),
             width=line_width
         )
 
     def update_debug_rect(instance, value):
-        # Обновляем координаты контура при изменении позиции или размера
         instance.debug_rect.rectangle = (
             instance.x, instance.y, instance.width, instance.height
         )
@@ -712,18 +900,8 @@ class TaskListPanel(BoxLayout):
 
         self.bind(pos=self._upd, size=self._upd)
 
-        # Временная заглушка
-        header = BoxLayout(
-            size_hint_y=None,
-            height=dp(56),
-        )
-
-        headerKostyl = BoxLayout(
-            size_hint_y=None,
-            height=dp(56),
-            padding=[dp(16), 0]
-        )
-
+        header = BoxLayout(size_hint_y=None, height=dp(56))
+        headerKostyl = BoxLayout(size_hint_y=None, height=dp(56), padding=[dp(16), 0])
         title = Label(
             text='[b]Список задач[/b]',
             markup=True,
@@ -733,30 +911,29 @@ class TaskListPanel(BoxLayout):
             font_size='18sp'
         )
         title.bind(size=title.setter('text_size'))
-
-        close_btn = RoundedBtn(
-            text='X',
-            bg=(0.7, 0.7, 0.7, 1),
-            radius=12,
-            size_hint_x=None,
-            font_size='20sp'
-        )
-        close_btn.bind(height=lambda instance, value: setattr(instance, 'width', value))
         headerKostyl.add_widget(title)
         header.add_widget(headerKostyl)
-        header.add_widget(close_btn)
 
+        right_box = BoxLayout(size_hint_x=None, height=dp(56), width=dp(120), spacing=dp(8), padding=[dp(8), 0])
+        add_btn = RoundedBtn(text='+', bg=(0.25, 0.6, 0.95, 1), radius=12, size_hint_x=None, font_size='20sp')
+        add_btn.bind(height=lambda instance, value: setattr(instance, 'width', value))
+        close_btn = RoundedBtn(text='X', bg=(0.7, 0.7, 0.7, 1), radius=12, size_hint_x=None, font_size='20sp')
+        close_btn.bind(height=lambda instance, value: setattr(instance, 'width', value))
 
+        right_box.add_widget(add_btn)
+        right_box.add_widget(close_btn)
+
+        header.add_widget(right_box)
         self.add_widget(header)
 
         self._close_btn = close_btn
+        self._add_btn = add_btn
 
-        self.scroll = ScrollView(
-            size_hint=(1, 1),
-            bar_width=dp(4),
-            do_scroll_x=False
-        )
+        from kivy.app import App
+        from kivy.clock import Clock
+        self._add_btn.bind(on_release=lambda *a: Clock.schedule_once(lambda dt: App.get_running_app().root.show_task_editor_new(), 0))
 
+        self.scroll = ScrollView(size_hint=(1, 1), bar_width=dp(4), do_scroll_x=False)
         self.container = BoxLayout(
             orientation='vertical',
             size_hint_x=1,
@@ -766,50 +943,22 @@ class TaskListPanel(BoxLayout):
         )
         self.container.bind(minimum_height=self.container.setter('height'))
 
-        card1 = STaskCard(
-            title='Завершено с просрочкой',
-            project='MAX Core',
-            description='Пример карточки с просрочкой выполнения задачи.',
-            start_time='2ч',
-            end_time='3ч 40м',
-            started=False,
-            overdue_time='1ч 20м'
-        )
-        card1.mark_completed_overdue('12.12', '1ч 20м')
+        all_tasks = taskManager.get_tasks() or []
 
-        card2 = STaskCard(
-            title='Завершенная задача',
-            project='MAX Core',
-            description='Задача была успешно завершена в срок.',
-            start_time='2ч 15м',
-            end_time='3ч 40м',
-            started=False
-        )
-        card2.mark_completed('11:20')
-
-        card3 = STaskCard(
-            title='Активная задача',
-            project='MAX Core',
-            description='Описание активной задачи, которая выполняется прямо сейчас.',
-            start_time='2ч 15м',
-            end_time='3ч 40м',
-            started=True
-        )
-        card3.set_state('active')
-
-        card4 = STaskCard(
-            title='Следующая задача',
-            project='MAX Core',
-            description='Задача в очереди на выполнение.',
-            start_time='1ч 10м',
-            end_time='2ч 30м',
-            started=False
-        )
-        card4.set_state('next')
-
-        for c in (card1, card2, card3, card4):
-            c.bind(height=lambda *a: setattr(self.container, 'height', self.container.minimum_height))
-            self.container.add_widget(c)
+        for task_id, task in enumerate(all_tasks):
+            card = STaskCard(
+                title=task.get("title", "Без названия"),
+                project=task.get("project", ""),
+                description=task.get("description", ""),
+                start_time=task.get("start_time", 0),
+                end_time=task.get("end_time", 0),
+                completed_time=task.get("completed_time", None),
+                started=task.get("started", False),
+                state=task.get("state", ""),
+                task_id=task_id
+            )
+            card.bind(height=lambda *a: setattr(self.container, 'height', self.container.minimum_height))
+            self.container.add_widget(card)
 
         self.scroll.add_widget(self.container)
         self.add_widget(self.scroll)
@@ -817,6 +966,204 @@ class TaskListPanel(BoxLayout):
     def _upd(self, *a):
         self._bg.pos = self.pos
         self._bg.size = self.size
+
+    def refresh(self):
+        self.container.clear_widgets()
+
+        all_tasks = taskManager.get_tasks() or []
+
+        for task_id, task in enumerate(all_tasks):
+            card = STaskCard(
+                title=task.get("title", "Без названия"),
+                project=task.get("project", ""),
+                description=task.get("description", ""),
+                start_time=task.get("start_time", 0),
+                end_time=task.get("end_time", 0),
+                completed_time=task.get("completed_time", None),
+                started=task.get("started", False),
+                state=task.get("state", ""),
+                task_id=task_id
+            )
+            card.bind(height=lambda *a: setattr(self.container, 'height', self.container.minimum_height))
+            self.container.add_widget(card)
+
+
+
+class TaskEditorPanel(BoxLayout):
+    def __init__(self, task_id=None):
+        super().__init__(orientation='vertical', size_hint=(1, None), height=dp(460))
+        self.task_id = task_id
+        self.y = -self.height
+
+        with self.canvas.before:
+            from kivy.graphics import Color, RoundedRectangle
+            Color(0.98, 0.99, 1, 1)
+            self._bg = RoundedRectangle(pos=self.pos, size=self.size, radius=[dp(12), dp(12), 0, 0])
+        self.bind(pos=self._upd_bg, size=self._upd_bg)
+
+        header = BoxLayout(size_hint_y=None, height=dp(56), padding=[dp(12), 0], spacing=dp(8))
+        self._title_lbl = Label(text='[b]Редактирование задачи[/b]' if task_id is not None else '[b]Новая задача[/b]',
+                                markup=True, size_hint_x=1, halign='left', valign='middle')
+        self._title_lbl.bind(size=self._title_lbl.setter('text_size'))
+        btn_box = BoxLayout(size_hint_x=None, width=dp(160), spacing=dp(8))
+        self._save_btn = Button(text='Сохранить', size_hint_x=None, width=dp(100))
+        self._close_btn = Button(text='Отмена', size_hint_x=None, width=dp(48))
+        btn_box.add_widget(self._save_btn)
+        btn_box.add_widget(self._close_btn)
+        header.add_widget(self._title_lbl)
+        header.add_widget(btn_box)
+        self.add_widget(header)
+
+        self.scroll = ScrollView(size_hint=(1, 1), do_scroll_x=False)
+        form = BoxLayout(orientation='vertical', size_hint_y=None, padding=[dp(16), dp(12)], spacing=dp(10))
+        form.bind(minimum_height=form.setter('height'))
+
+        def add_field(label_text, multiline=False, height=dp(44), initial=""):
+            lbl = Label(text=label_text, size_hint_y=None, height=dp(18), halign='left', valign='middle')
+            lbl.bind(size=lbl.setter('text_size'))
+            inp = TextInput(text=initial, multiline=multiline, size_hint_y=None, height=height)
+            form.add_widget(lbl)
+            form.add_widget(inp)
+            return inp
+
+        self.in_title = add_field("Название", multiline=False, initial="")
+        self.in_project = add_field("Проект", multiline=False, initial="")
+        self.in_description = add_field("Описание", multiline=True, height=dp(110), initial="")
+
+        start_box = BoxLayout(size_hint_y=None, height=dp(44), spacing=dp(8))
+        self.start_btn = Button(text="Выбрать дату/время начала", size_hint_x=1)
+        self.start_dt = None
+        start_box.add_widget(self.start_btn)
+        form.add_widget(Label(text="Дата и время начала", size_hint_y=None, height=dp(18), halign='left', valign='middle'))
+        form.add_widget(start_box)
+
+        end_box = BoxLayout(size_hint_y=None, height=dp(44), spacing=dp(8))
+        self.end_btn = Button(text="Выбрать дату/время дедлайна", size_hint_x=1)
+        self.end_dt = None
+        end_box.add_widget(self.end_btn)
+        form.add_widget(Label(text="Дедлайн", size_hint_y=None, height=dp(18), halign='left', valign='middle'))
+        form.add_widget(end_box)
+
+        self.scroll.add_widget(form)
+        self.add_widget(self.scroll)
+
+        self._close_btn.bind(on_release=lambda *a: self.hide())
+        self._save_btn.bind(on_release=self._on_save)
+        self.start_btn.bind(on_release=self._open_start_date)
+        self.end_btn.bind(on_release=self._open_end_date)
+
+        Clock.schedule_once(lambda dt: self._populate_if_edit(), 0)
+
+    def _upd_bg(self, *a):
+        self._bg.pos = self.pos
+        self._bg.size = self.size
+
+    def _populate_if_edit(self):
+        if self.task_id is None:
+            return
+        tasks = taskManager.get_tasks() or []
+        if not (0 <= self.task_id < len(tasks)):
+            return
+        task = tasks[self.task_id]
+        self._title_lbl.text = '[b]Редактирование задачи[/b]'
+        self.in_title.text = str(task.get("title", "")) or ""
+        self.in_project.text = str(task.get("project", "")) or ""
+        self.in_description.text = str(task.get("description", "")) or ""
+        st = task.get("start_time")
+        et = task.get("end_time")
+        try:
+            if st:
+                self.start_dt = datetime.fromtimestamp(int(st))
+                self.start_btn.text = self.start_dt.strftime("%Y-%m-%d %H:%M")
+        except Exception:
+            self.start_dt = None
+        try:
+            if et:
+                self.end_dt = datetime.fromtimestamp(int(et))
+                self.end_btn.text = self.end_dt.strftime("%Y-%m-%d %H:%M")
+        except Exception:
+            self.end_dt = None
+
+    def _open_start_date(self, *a):
+        date_dialog = MDDatePicker()
+        date_dialog.bind(on_save=self._on_start_date)
+        date_dialog.open()
+
+    def _on_start_date(self, instance, value, date_range):
+        self.start_dt = datetime(value.year, value.month, value.day, 0, 0)
+        time_dialog = MDTimePicker()
+        time_dialog.bind(on_save=self._on_start_time)
+        time_dialog.open()
+
+    def _on_start_time(self, instance, time_obj):
+        if self.start_dt:
+            self.start_dt = datetime(self.start_dt.year, self.start_dt.month, self.start_dt.day, time_obj.hour, time_obj.minute)
+            self.start_btn.text = self.start_dt.strftime("%Y-%m-%d %H:%M")
+
+    def _open_end_date(self, *a):
+        date_dialog = MDDatePicker()
+        date_dialog.bind(on_save=self._on_end_date)
+        date_dialog.open()
+
+    def _on_end_date(self, instance, value, date_range):
+        self.end_dt = datetime(value.year, value.month, value.day, 0, 0)
+        time_dialog = MDTimePicker()
+        time_dialog.bind(on_save=self._on_end_time)
+        time_dialog.open()
+
+    def _on_end_time(self, instance, time_obj):
+        if self.end_dt:
+            self.end_dt = datetime(self.end_dt.year, self.end_dt.month, self.end_dt.day, time_obj.hour, time_obj.minute)
+            self.end_btn.text = self.end_dt.strftime("%Y-%m-%d %H:%M")
+
+    def show(self):
+        Animation.cancel_all(self)
+        anim = Animation(y=0, d=0.28, t='out_cubic')
+        anim.start(self)
+
+    def hide(self):
+        def _remove(anim, widget):
+            try:
+                if widget.parent:
+                    widget.parent.remove_widget(widget)
+            except Exception:
+                pass
+        Animation.cancel_all(self)
+        anim = Animation(y=-self.height, d=0.22, t='in_cubic')
+        anim.bind(on_complete=_remove)
+        anim.start(self)
+
+    def _on_save(self, *a):
+        title = (self.in_title.text or "").strip() or "Без названия"
+        project = (self.in_project.text or "").strip()
+        description = (self.in_description.text or "").strip()
+        start_ts = int(self.start_dt.timestamp()) if self.start_dt else None
+        end_ts = int(self.end_dt.timestamp()) if self.end_dt else None
+        now_ts = int(datetime.now().timestamp())
+        state = 'next'
+        started_flag = False
+        if start_ts is not None and start_ts <= now_ts:
+            state = 'active'
+            started_flag = True
+        try:
+            if self.task_id is None:
+                new_task = taskManager.add_task(title, project, description, start_ts, end_ts, started=started_flag, state=state)
+                tasks = taskManager.get_tasks()
+                idx = len(tasks) - 1
+                tasks[idx].setdefault("reminders_sent", {})
+                tasks[idx].setdefault("missed_notifications", {})
+                taskManager.save_tasks()
+            else:
+                taskManager.edit_task(self.task_id, title=title, project=project, description=description, start_time=start_ts, end_time=end_ts)
+                tasks = taskManager.get_tasks()
+                if 0 <= self.task_id < len(tasks):
+                    tasks[self.task_id]["reminders_sent"] = {}
+                    tasks[self.task_id]["missed_notifications"] = {}
+                    taskManager.save_tasks()
+        except Exception as e:
+            print("TaskEditorPanel save error:", e)
+        Clock.schedule_once(lambda dt: MDApp.get_running_app().refresh_tasks(), 0)
+        self.hide()
 
 class RootLayout(FloatLayout):
     def __init__(self):
@@ -850,21 +1197,53 @@ class RootLayout(FloatLayout):
         self.bottom_bar.pos_hint = {'y': 0}
         self.add_widget(self.bottom_bar)
 
-        # Панель списка задач (скрыта)
         self.task_list = TaskListPanel()
         self.task_list.pos_hint = {'x': 0}
-        self.task_list.y = -self.height  # Прячем за нижней границей
+        self.task_list.y = -self.height
         self.add_widget(self.task_list)
 
-        # Привязываем кнопки
+        self._task_editor = TaskEditorPanel()
+        self.add_widget(self._task_editor)
+
         self.bottom_bar.list_btn.bind(on_release=self._show_task_list)
         self.task_list._close_btn.bind(on_release=self._hide_task_list)
 
-        # Обновляем позицию панели при изменении размера окна
         self.bind(height=self._update_task_list_position)
 
+    def update_all_task_cards(self):
+        self.task_list.refresh()
+        self.content.refresh()
+
+    def show_task_editor_new(self, *a):
+        self.show_task_editor(None)
+
+    def show_task_editor(self, task_id):
+        if self._task_editor:
+            if self._task_editor.task_id != task_id:
+                try:
+                    self.remove_widget(self._task_editor)
+                except Exception:
+                    pass
+                self._task_editor = None
+
+        if not self._task_editor:
+            self._task_editor = TaskEditorPanel(task_id=task_id)
+            self._task_editor.size_hint_x = 1
+            self.add_widget(self._task_editor)
+            Clock.schedule_once(lambda dt: self._task_editor.show(), 0)
+        else:
+            self._task_editor.task_id = task_id
+            Clock.schedule_once(lambda dt: self._task_editor._populate_if_edit(), 0)
+            Clock.schedule_once(lambda dt: self._task_editor.show(), 0)
+
+    def hide_task_editor(self):
+        if self._task_editor:
+            self._task_editor.hide()
+            def _clear(dt):
+                self._task_editor = None
+            Clock.schedule_once(_clear, 0.3)
+
     def _update_task_list_position(self, *args):
-        # Если панель скрыта, обновляем её начальную позицию
         if not hasattr(self, '_task_list_visible') or not self._task_list_visible:
             self.task_list.y = -self.height
 
@@ -884,10 +1263,13 @@ class RootLayout(FloatLayout):
         self._round.pos = self.pos
         self._round.size = self.size
 
-
-class MainApp(App):
+class MainApp(MDApp):
     def build(self):
-        return RootLayout()
+        self.root_layout = RootLayout()
+        return self.root_layout
 
+    def refresh_tasks(self):
+        self.root_layout.update_all_task_cards()
 
+taskManager.start_manager()
 MainApp().run()
