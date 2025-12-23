@@ -24,6 +24,8 @@ from kivy.animation import Animation
 from datetime import datetime
 from kivymd.app import MDApp
 from kivymd.uix.pickers import MDTimePicker, MDDatePicker
+import logging
+logging.basicConfig(level=logging.DEBUG)
 
 import taskManager
 
