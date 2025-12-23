@@ -1,39 +1,54 @@
-name: Build APK
-
+name: Build
 on:
   push:
-    branches: [ main, master ]
+    branches-ignore:
+      - data
+      - gh-pages
+    tags:
+      - '**'
   pull_request:
-    branches: [ main, master ]
-  workflow_dispatch:
+    branches-ignore:
+      - data
+      - gh-pages
 
 jobs:
-  build:
+  # Build job. Builds app for Android with Buildozer
+  build-android:
+    name: Build for Android
     runs-on: ubuntu-latest
-    container:
-      image: kivy/buildozer:latest
 
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          path: master
 
-    - name: Build with Buildozer
-      run: |
-        buildozer -y android debug
-      env:
-        BUILDOZER_WARN_ON_ROOT: 0
+      - name: Build with Buildozer
+        uses: ./master # REPLACE WITH ArtemSBulgakov/buildozer-action@v1
+        id: buildozer
+        with:
+          repository_root: master
+          workdir: test_app
+          buildozer_version: stable
 
-    - name: Upload APK
-      uses: actions/upload-artifact@v4
-      with:
-        name: app-debug
-        path: bin/*.apk
-        if-no-files-found: error
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: package
+          path: ${{ steps.buildozer.outputs.filename }}
 
-    - name: Create Release
-      if: startsWith(github.ref, 'refs/tags/')
-      uses: softprops/action-gh-release@v1
-      with:
-        files: bin/*.apk
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          path: data
+          ref: data # Branch name
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          architecture: x64
+
+      - name: Push binary to data branch
+        if: github.event_name == 'push'
+        run: python master/.ci/move_binary.py "${{ steps.buildozer.outputs.filename }}" master data bin
