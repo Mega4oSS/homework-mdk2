@@ -1,4 +1,5 @@
 import datetime
+import time
 
 from kivy import Config
 from kivy.app import App
@@ -916,7 +917,8 @@ class TaskListPanel(BoxLayout):
 
         right_box = BoxLayout(size_hint_x=None, height=dp(56), width=dp(120), spacing=dp(8), padding=[dp(8), 0])
         add_btn = RoundedBtn(text='+', bg=(0.25, 0.6, 0.95, 1), radius=12, size_hint_x=None, font_size='20sp')
-        add_btn.bind(height=lambda instance, value: setattr(instance, 'width', value))
+        add_btn.bind(height=lambda i, v: setattr(i, 'width', v))
+        add_btn.bind(on_release=lambda *_: self.parent.show_task_editor())
         close_btn = RoundedBtn(text='X', bg=(0.7, 0.7, 0.7, 1), radius=12, size_hint_x=None, font_size='20sp')
         close_btn.bind(height=lambda instance, value: setattr(instance, 'width', value))
 
@@ -989,181 +991,149 @@ class TaskListPanel(BoxLayout):
 
 
 
+
 class TaskEditorPanel(BoxLayout):
-    def __init__(self, task_id=None):
-        super().__init__(orientation='vertical', size_hint=(1, None), height=dp(460))
+    def __init__(self, root, task=None, task_id=None):
+        super().__init__(orientation='vertical')
+        self.root = root
+        self.task = task or {}
         self.task_id = task_id
-        self.y = -self.height
 
         with self.canvas.before:
-            from kivy.graphics import Color, RoundedRectangle
-            Color(0.98, 0.99, 1, 1)
-            self._bg = RoundedRectangle(pos=self.pos, size=self.size, radius=[dp(12), dp(12), 0, 0])
-        self.bind(pos=self._upd_bg, size=self._upd_bg)
+            Color(0.95, 0.96, 0.98, 1)
+            self._bg = RoundedRectangle(pos=self.pos, size=self.size, radius=[dp(16), dp(16), 0, 0])
 
-        header = BoxLayout(size_hint_y=None, height=dp(56), padding=[dp(12), 0], spacing=dp(8))
-        self._title_lbl = Label(text='[b]Редактирование задачи[/b]' if task_id is not None else '[b]Новая задача[/b]',
-                                markup=True, size_hint_x=1, halign='left', valign='middle')
-        self._title_lbl.bind(size=self._title_lbl.setter('text_size'))
-        btn_box = BoxLayout(size_hint_x=None, width=dp(160), spacing=dp(8))
-        self._save_btn = Button(text='Сохранить', size_hint_x=None, width=dp(100))
-        self._close_btn = Button(text='Отмена', size_hint_x=None, width=dp(48))
-        btn_box.add_widget(self._save_btn)
-        btn_box.add_widget(self._close_btn)
-        header.add_widget(self._title_lbl)
-        header.add_widget(btn_box)
+        self.bind(pos=self._upd, size=self._upd)
+
+        header = BoxLayout(size_hint_y=None, height=dp(56), padding=[dp(16), 0], spacing=dp(8))
+        title = Label(
+            text='[b]Редактирование задачи[/b]' if task else '[b]Новая задача[/b]',
+            markup=True,
+            halign='left',
+            valign='middle',
+            color=(0, 0, 0, 1)
+        )
+        title.bind(size=title.setter('text_size'))
+
+        save_btn = RoundedBtn(text='✓', bg=(0.3, 0.6, 0.3, 1), radius=12, size_hint_x=None)
+        save_btn.bind(height=lambda i, v: setattr(i, 'width', v))
+        save_btn.bind(on_release=self._save)
+
+        close_btn = RoundedBtn(text='X', bg=(0.7, 0.7, 0.7, 1), radius=12, size_hint_x=None)
+        close_btn.bind(height=lambda i, v: setattr(i, 'width', v))
+        close_btn.bind(on_release=self._close)
+
+        header.add_widget(title)
+        header.add_widget(save_btn)
+        header.add_widget(close_btn)
         self.add_widget(header)
 
-        self.scroll = ScrollView(size_hint=(1, 1), do_scroll_x=False)
-        form = BoxLayout(orientation='vertical', size_hint_y=None, padding=[dp(16), dp(12)], spacing=dp(10))
-        form.bind(minimum_height=form.setter('height'))
+        scroll = ScrollView()
+        content = BoxLayout(orientation='vertical', size_hint_y=None, padding=[dp(20), dp(20)], spacing=dp(16))
+        content.bind(minimum_height=content.setter('height'))
 
-        def add_field(label_text, multiline=False, height=dp(44), initial=""):
-            lbl = Label(text=label_text, size_hint_y=None, height=dp(18), halign='left', valign='middle')
-            lbl.bind(size=lbl.setter('text_size'))
-            inp = TextInput(text=initial, multiline=multiline, size_hint_y=None, height=height)
-            form.add_widget(lbl)
-            form.add_widget(inp)
-            return inp
+        self.title_input = self._field(content, 'Название', self.task.get('title', ''))
+        self.project_input = self._field(content, 'Проект', self.task.get('project', ''))
+        self.desc_input = self._field(content, 'Описание', self.task.get('description', ''), multiline=True, h=dp(96))
 
-        self.in_title = add_field("Название", multiline=False, initial="")
-        self.in_project = add_field("Проект", multiline=False, initial="")
-        self.in_description = add_field("Описание", multiline=True, height=dp(110), initial="")
+        self.start_time = self.task.get('start_time')
+        self.end_time = self.task.get('end_time')
 
-        start_box = BoxLayout(size_hint_y=None, height=dp(44), spacing=dp(8))
-        self.start_btn = Button(text="Выбрать дату/время начала", size_hint_x=1)
-        self.start_dt = None
-        start_box.add_widget(self.start_btn)
-        form.add_widget(Label(text="Дата и время начала", size_hint_y=None, height=dp(18), halign='left', valign='middle'))
-        form.add_widget(start_box)
+        self.start_btn = self._time_btn(content, 'Дата начала', self.start_time, self._pick_start)
+        self.end_btn = self._time_btn(content, 'Дедлайн', self.end_time, self._pick_end)
 
-        end_box = BoxLayout(size_hint_y=None, height=dp(44), spacing=dp(8))
-        self.end_btn = Button(text="Выбрать дату/время дедлайна", size_hint_x=1)
-        self.end_dt = None
-        end_box.add_widget(self.end_btn)
-        form.add_widget(Label(text="Дедлайн", size_hint_y=None, height=dp(18), halign='left', valign='middle'))
-        form.add_widget(end_box)
+        scroll.add_widget(content)
+        self.add_widget(scroll)
 
-        self.scroll.add_widget(form)
-        self.add_widget(self.scroll)
+    def _field(self, parent, text, value, multiline=False, h=dp(44)):
+        box = BoxLayout(orientation='vertical', size_hint_y=None)
+        box.height = h + dp(20)
 
-        self._close_btn.bind(on_release=lambda *a: self.hide())
-        self._save_btn.bind(on_release=self._on_save)
-        self.start_btn.bind(on_release=self._open_start_date)
-        self.end_btn.bind(on_release=self._open_end_date)
+        lbl = Label(text=text, size_hint_y=None, height=dp(20), halign='left', valign='middle', color=(0,0,0,1))
+        lbl.bind(size=lbl.setter('text_size'))
 
-        Clock.schedule_once(lambda dt: self._populate_if_edit(), 0)
+        inp = TextInput(text=value, size_hint_y=None, height=h, multiline=multiline)
 
-    def _upd_bg(self, *a):
+        box.add_widget(lbl)
+        box.add_widget(inp)
+        parent.add_widget(box)
+        return inp
+
+    def _time_btn(self, parent, text, value, callback):
+        box = BoxLayout(orientation='vertical', size_hint_y=None, height=dp(64))
+
+        lbl = Label(text=text, size_hint_y=None, height=dp(20), halign='left', valign='middle', color=(0,0,0,1))
+        lbl.bind(size=lbl.setter('text_size'))
+
+        btn = RoundedBtn(
+            text=time.strftime('%d.%m.%Y %H:%M', time.localtime(value)) if value else 'Выбрать',
+            bg=(0.8, 0.8, 0.8, 1)
+        )
+        btn.bind(on_release=callback)
+
+        box.add_widget(lbl)
+        box.add_widget(btn)
+        parent.add_widget(box)
+        return btn
+
+    def _pick_start(self, *_):
+        picker = MDDatePicker()
+        picker.bind(on_save=self._start_date)
+        picker.open()
+
+    def _start_date(self, _, date, *__):
+        picker = MDTimePicker()
+        picker.bind(on_save=lambda _, t: self._set_start(date, t))
+        picker.open()
+
+    def _set_start(self, date, t):
+        self.start_time = int(time.mktime(date.timetuple())) + t.hour * 3600 + t.minute * 60
+        self.start_btn.text = time.strftime('%d.%m.%Y %H:%M', time.localtime(self.start_time))
+
+    def _pick_end(self, *_):
+        picker = MDDatePicker()
+        picker.bind(on_save=self._end_date)
+        picker.open()
+
+    def _end_date(self, _, date, *__):
+        picker = MDTimePicker()
+        picker.bind(on_save=lambda _, t: self._set_end(date, t))
+        picker.open()
+
+    def _set_end(self, date, t):
+        self.end_time = int(time.mktime(date.timetuple())) + t.hour * 3600 + t.minute * 60
+        self.end_btn.text = time.strftime('%d.%m.%Y %H:%M', time.localtime(self.end_time))
+
+    def _save(self, *_):
+        data = {
+            "title": self.title_input.text,
+            "project": self.project_input.text,
+            "description": self.desc_input.text,
+            "start_time": self.start_time,
+            "end_time": self.end_time,
+            "started": False,
+            "state": "pending",
+            "completed_time": None,
+            "reminders_sent": {},
+            "missed_notifications": {}
+        }
+
+        if self.task_id is None:
+            taskManager.add_task(data)
+        else:
+            taskManager.update_task(self.task_id, data)
+
+        self.root.update_all_task_cards()
+        self._close()
+
+    def _close(self, *_):
+        anim = Animation(y=-self.height, duration=0.25, transition='in_cubic')
+        anim.bind(on_complete=lambda *_: self.root.remove_widget(self))
+        anim.start(self)
+
+    def _upd(self, *_):
         self._bg.pos = self.pos
         self._bg.size = self.size
-
-    def _populate_if_edit(self):
-        if self.task_id is None:
-            return
-        tasks = taskManager.get_tasks() or []
-        if not (0 <= self.task_id < len(tasks)):
-            return
-        task = tasks[self.task_id]
-        self._title_lbl.text = '[b]Редактирование задачи[/b]'
-        self.in_title.text = str(task.get("title", "")) or ""
-        self.in_project.text = str(task.get("project", "")) or ""
-        self.in_description.text = str(task.get("description", "")) or ""
-        st = task.get("start_time")
-        et = task.get("end_time")
-        try:
-            if st:
-                self.start_dt = datetime.fromtimestamp(int(st))
-                self.start_btn.text = self.start_dt.strftime("%Y-%m-%d %H:%M")
-        except Exception:
-            self.start_dt = None
-        try:
-            if et:
-                self.end_dt = datetime.fromtimestamp(int(et))
-                self.end_btn.text = self.end_dt.strftime("%Y-%m-%d %H:%M")
-        except Exception:
-            self.end_dt = None
-
-    def _open_start_date(self, *a):
-        date_dialog = MDDatePicker()
-        date_dialog.bind(on_save=self._on_start_date)
-        date_dialog.open()
-
-    def _on_start_date(self, instance, value, date_range):
-        self.start_dt = datetime(value.year, value.month, value.day, 0, 0)
-        time_dialog = MDTimePicker()
-        time_dialog.bind(on_save=self._on_start_time)
-        time_dialog.open()
-
-    def _on_start_time(self, instance, time_obj):
-        if self.start_dt:
-            self.start_dt = datetime(self.start_dt.year, self.start_dt.month, self.start_dt.day, time_obj.hour, time_obj.minute)
-            self.start_btn.text = self.start_dt.strftime("%Y-%m-%d %H:%M")
-
-    def _open_end_date(self, *a):
-        date_dialog = MDDatePicker()
-        date_dialog.bind(on_save=self._on_end_date)
-        date_dialog.open()
-
-    def _on_end_date(self, instance, value, date_range):
-        self.end_dt = datetime(value.year, value.month, value.day, 0, 0)
-        time_dialog = MDTimePicker()
-        time_dialog.bind(on_save=self._on_end_time)
-        time_dialog.open()
-
-    def _on_end_time(self, instance, time_obj):
-        if self.end_dt:
-            self.end_dt = datetime(self.end_dt.year, self.end_dt.month, self.end_dt.day, time_obj.hour, time_obj.minute)
-            self.end_btn.text = self.end_dt.strftime("%Y-%m-%d %H:%M")
-
-    def show(self):
-        Animation.cancel_all(self)
-        anim = Animation(y=0, d=0.28, t='out_cubic')
-        anim.start(self)
-
-    def hide(self):
-        def _remove(anim, widget):
-            try:
-                if widget.parent:
-                    widget.parent.remove_widget(widget)
-            except Exception:
-                pass
-        Animation.cancel_all(self)
-        anim = Animation(y=-self.height, d=0.22, t='in_cubic')
-        anim.bind(on_complete=_remove)
-        anim.start(self)
-
-    def _on_save(self, *a):
-        title = (self.in_title.text or "").strip() or "Без названия"
-        project = (self.in_project.text or "").strip()
-        description = (self.in_description.text or "").strip()
-        start_ts = int(self.start_dt.timestamp()) if self.start_dt else None
-        end_ts = int(self.end_dt.timestamp()) if self.end_dt else None
-        now_ts = int(datetime.now().timestamp())
-        state = 'next'
-        started_flag = False
-        if start_ts is not None and start_ts <= now_ts:
-            state = 'active'
-            started_flag = True
-        try:
-            if self.task_id is None:
-                new_task = taskManager.add_task(title, project, description, start_ts, end_ts, started=started_flag, state=state)
-                tasks = taskManager.get_tasks()
-                idx = len(tasks) - 1
-                tasks[idx].setdefault("reminders_sent", {})
-                tasks[idx].setdefault("missed_notifications", {})
-                taskManager.save_tasks()
-            else:
-                taskManager.edit_task(self.task_id, title=title, project=project, description=description, start_time=start_ts, end_time=end_ts)
-                tasks = taskManager.get_tasks()
-                if 0 <= self.task_id < len(tasks):
-                    tasks[self.task_id]["reminders_sent"] = {}
-                    tasks[self.task_id]["missed_notifications"] = {}
-                    taskManager.save_tasks()
-        except Exception as e:
-            print("TaskEditorPanel save error:", e)
-        Clock.schedule_once(lambda dt: MDApp.get_running_app().refresh_tasks(), 0)
-        self.hide()
 
 class RootLayout(FloatLayout):
     def __init__(self):
@@ -1202,9 +1172,6 @@ class RootLayout(FloatLayout):
         self.task_list.y = -self.height
         self.add_widget(self.task_list)
 
-        self._task_editor = TaskEditorPanel()
-        self.add_widget(self._task_editor)
-
         self.bottom_bar.list_btn.bind(on_release=self._show_task_list)
         self.task_list._close_btn.bind(on_release=self._hide_task_list)
 
@@ -1217,24 +1184,14 @@ class RootLayout(FloatLayout):
     def show_task_editor_new(self, *a):
         self.show_task_editor(None)
 
-    def show_task_editor(self, task_id):
-        if self._task_editor:
-            if self._task_editor.task_id != task_id:
-                try:
-                    self.remove_widget(self._task_editor)
-                except Exception:
-                    pass
-                self._task_editor = None
+    def show_task_editor(self, task=None, task_id=None):
+        panel = TaskEditorPanel(self, task, task_id)
+        panel.pos_hint = {'x': 0}
+        panel.y = -self.height
+        self.add_widget(panel)
 
-        if not self._task_editor:
-            self._task_editor = TaskEditorPanel(task_id=task_id)
-            self._task_editor.size_hint_x = 1
-            self.add_widget(self._task_editor)
-            Clock.schedule_once(lambda dt: self._task_editor.show(), 0)
-        else:
-            self._task_editor.task_id = task_id
-            Clock.schedule_once(lambda dt: self._task_editor._populate_if_edit(), 0)
-            Clock.schedule_once(lambda dt: self._task_editor.show(), 0)
+        anim = Animation(y=0, duration=0.3, transition='out_cubic')
+        anim.start(panel)
 
     def hide_task_editor(self):
         if self._task_editor:

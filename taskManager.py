@@ -8,7 +8,7 @@ from kivy.clock import Clock
 from kivy.app import App
 from kivymd.app import MDApp
 
-TASKS_FILE = Path.home() / "tasks.json"
+TASKS_FILE = str(Path(os.environ.get('HOME', '/data/data/org.test.myapp')) / "tasks.json")
 
 tasks = []
 
