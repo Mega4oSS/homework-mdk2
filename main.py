@@ -1,5 +1,7 @@
 import datetime
+import sys
 import time
+import traceback
 
 from kivy import Config
 from kivy.app import App
@@ -24,6 +26,15 @@ from kivymd.app import MDApp
 from kivymd.uix.pickers import MDTimePicker, MDDatePicker
 
 import taskManager
+
+def exception_handler(exc_type, exc_value, exc_traceback):
+    print("=" * 50)
+    print("CRITICAL ERROR:")
+    print("=" * 50)
+    traceback.print_exception(exc_type, exc_value, exc_traceback)
+    print("=" * 50)
+
+sys.excepthook = exception_handler
 
 Window.clearcolor = (1, 0, 1, 1)
 
@@ -1112,16 +1123,24 @@ class TaskEditorPanel(BoxLayout):
             "start_time": self.start_time,
             "end_time": self.end_time,
             "started": False,
-            "state": "pending",
+            "state": "next",
             "completed_time": None,
             "reminders_sent": {},
             "missed_notifications": {}
         }
 
         if self.task_id is None:
-            taskManager.add_task(data)
+            taskManager.add_task(
+                title=self.title_input.text,
+                project=self.project_input.text,
+                description=self.desc_input.text,
+                start_time=self.start_time,
+                end_time=self.end_time,
+                started=False,
+                state="next"
+        )
         else:
-            taskManager.update_task(self.task_id, data)
+            taskManager.edit_task(self.task_id, data)
 
         self.root.update_all_task_cards()
         self._close()
@@ -1220,13 +1239,21 @@ class RootLayout(FloatLayout):
         self._round.pos = self.pos
         self._round.size = self.size
 
+
 class MainApp(MDApp):
     def build(self):
         self.root_layout = RootLayout()
         return self.root_layout
 
+    def on_start(self):
+        taskManager.initialize()
+        taskManager.start_manager()
+
+    def on_stop(self):
+        taskManager.stop_manager()
+        return True
+
     def refresh_tasks(self):
         self.root_layout.update_all_task_cards()
 
-taskManager.start_manager()
 MainApp().run()

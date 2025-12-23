@@ -8,15 +8,30 @@ from kivy.clock import Clock
 from kivy.app import App
 from kivymd.app import MDApp
 
-TASKS_FILE = str(Path(os.environ.get('HOME', '/data/data/org.test.myapp')) / "tasks.json")
+def get_tasks_file():
+    app = App.get_running_app()
+    if app:
+        return os.path.join(app.user_data_dir, "tasks.json")
+    # Fallback для инициализации до запуска app
+    return os.path.join(os.path.expanduser("~"), "tasks.json")
 
 tasks = []
 
+_initialized = False
+
+def initialize():
+    """Вызвать после инициализации приложения"""
+    global _initialized
+    if not _initialized:
+        load_tasks()
+        _initialized = True
+
+
 def load_tasks():
     global tasks
-    if os.path.exists(TASKS_FILE):
+    if os.path.exists(get_tasks_file()):
         try:
-            with open(TASKS_FILE, "r", encoding="utf-8") as f:
+            with open(get_tasks_file(), "r", encoding="utf-8") as f:
                 tasks = json.load(f)
         except Exception:
             tasks = []
@@ -24,7 +39,7 @@ def load_tasks():
         tasks = []
 
 def save_tasks():
-    with open(TASKS_FILE, "w", encoding="utf-8") as f:
+    with open(get_tasks_file(), "w", encoding="utf-8") as f:
         json.dump(tasks, f, ensure_ascii=False, indent=4)
 
 def add_task(title, project, description, start_time, end_time, started=False, state='next'):
@@ -70,8 +85,6 @@ def edit_task(task_index, title=None, project=None, description=None, start_time
 
 def get_tasks():
     return tasks
-
-load_tasks()
 
 RUN_LOOP_INTERVAL = 20
 
@@ -173,7 +186,12 @@ def _check_all_tasks():
                 task["started_time"] = now
 
                 save_tasks()
-                Clock.schedule_once(lambda dt: MDApp.get_running_app().refresh_tasks(), 0)
+                try:
+                    app = MDApp.get_running_app()
+                    if app and hasattr(app, 'refresh_tasks'):
+                        Clock.schedule_once(lambda dt: app.refresh_tasks(), 0)
+                except Exception as e:
+                    print(f"Error scheduling refresh: {e}")
                 active_exists = True
             else:
                 if now >= t15 and not reminders.get("r15"):
@@ -222,3 +240,4 @@ def _check_all_tasks():
             pass
         elif state == "next":
             pass
+
