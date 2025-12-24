@@ -1250,6 +1250,7 @@ class MainApp(MDApp):
     def on_start(self):
         taskManager.initialize()
         taskManager.start_manager()
+        self.refresh_tasks()
 
     def on_stop(self):
         taskManager.stop_manager()
