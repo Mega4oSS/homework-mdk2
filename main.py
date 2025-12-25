@@ -1,4 +1,6 @@
 import datetime
+import json
+import os
 import sys
 import time
 import traceback
@@ -23,11 +25,23 @@ from kivy.clock import Clock
 from kivy.animation import Animation
 from datetime import datetime
 from kivymd.app import MDApp
+from kivymd.uix.button import MDFlatButton
+from kivymd.uix.dialog import MDDialog
 from kivymd.uix.pickers import MDTimePicker, MDDatePicker
 import logging
+
+from kivymd.uix.selectioncontrol import MDSwitch
+from kivymd.uix.textfield import MDTextField
+
 logging.basicConfig(level=logging.DEBUG)
 
 import taskManager
+
+LabelBase.register(
+    name='Emojis',
+    fn_regular='fonts/NotoSansSymbols2-Regular.ttf',
+    fn_bold='fonts/NotoEmoji-Regular.ttf'
+)
 
 def exception_handler(exc_type, exc_value, exc_traceback):
     print("=" * 50)
@@ -40,6 +54,7 @@ sys.excepthook = exception_handler
 
 Window.clearcolor = (1, 0, 1, 1)
 
+
 class RoundedBtn(Button):
     def __init__(self, bg=(0.2, 0.5, 0.9, 1), radius=dp(16), **kw):
         super().__init__(**kw)
@@ -48,15 +63,85 @@ class RoundedBtn(Button):
         self.background_color = (0, 0, 0, 0)
         self.color = (1, 1, 1, 1)
         self._bg = bg
+        self._original_bg = bg
         self._radius = [radius] if not isinstance(radius, (list, tuple)) else radius
+        self._is_hovered = False
+        self._is_pressed = False
+        self._current_anim = None
+
         with self.canvas.before:
             self._col = Color(*self._bg)
             self._rect = RoundedRectangle(pos=self.pos, size=self.size, radius=self._radius)
+
         self.bind(pos=self._u, size=self._u)
+        Window.bind(mouse_pos=self._on_mouse_pos)
 
     def _u(self, *a):
         self._rect.pos = self.pos
         self._rect.size = self.size
+
+    def _on_mouse_pos(self, window, pos):
+        if self.disabled:
+            return
+
+        if self.collide_point(*self.to_widget(*pos)):
+            if not self._is_hovered:
+                self._is_hovered = True
+                self._update_color()
+        else:
+            if self._is_hovered:
+                self._is_hovered = False
+                self._update_color()
+
+    def on_touch_down(self, touch):
+        if self.collide_point(*touch.pos) and not self.disabled:
+            self._is_pressed = True
+            self._update_color()
+        return super().on_touch_down(touch)
+
+    def on_touch_up(self, touch):
+        if self._is_pressed:
+            self._is_pressed = False
+            self._update_color()
+        return super().on_touch_up(touch)
+
+    def _update_color(self):
+        if self._current_anim:
+            self._current_anim.cancel(self._col)
+
+        target_color = None
+        duration = 0.2
+
+        if self.disabled:
+            target_color = (
+                self._original_bg[0] * 0.5,
+                self._original_bg[1] * 0.5,
+                self._original_bg[2] * 0.5,
+                self._original_bg[3] * 0.7
+            )
+        elif self._is_pressed:
+            duration = 0.1
+            target_color = (
+                self._original_bg[0] * 0.7,
+                self._original_bg[1] * 0.7,
+                self._original_bg[2] * 0.7,
+                self._original_bg[3]
+            )
+        elif self._is_hovered:
+            target_color = (
+                min(1.0, self._original_bg[0] * 1.15),
+                min(1.0, self._original_bg[1] * 1.15),
+                min(1.0, self._original_bg[2] * 1.15),
+                self._original_bg[3]
+            )
+        else:
+            target_color = self._original_bg
+
+        self._current_anim = Animation(rgba=target_color, duration=duration, transition='out_quad')
+        self._current_anim.start(self._col)
+
+    def on_disabled(self, instance, value):
+        self._update_color()
 
 def make_vertical_gradient_texture(h=256, c1=(0.95, 0.97, 1, 1), c2=(0.9, 0.93, 0.99, 1)):
     h = max(2, int(h))
@@ -72,6 +157,7 @@ def make_vertical_gradient_texture(h=256, c1=(0.95, 0.97, 1, 1), c2=(0.9, 0.93, 
     tex.blit_buffer(bytes(buf), colorfmt='rgba', bufferfmt='ubyte')
     tex.wrap = 'repeat'
     return tex
+
 
 class TopBar(BoxLayout):
     def __init__(self):
@@ -116,24 +202,70 @@ class TopBar(BoxLayout):
         left_box.add_widget(self.logo)
         left_box.add_widget(self.title)
 
-        self.project_btn = RoundedBtn(
-            text='MAX Core ▼',
-            bg=(0.16, 0.36, 0.78, 1),
+        self.add_widget(left_box)
+
+        right_box = BoxLayout(
+            orientation='vertical',
             size_hint_x=None,
-            radius=[dp(0), dp(0), dp(0), dp(16)],
-            width=dp(120),
-            font_size='13sp'
+            width=dp(200),
+            padding=[0, dp(8), dp(14), dp(8)]
         )
 
-        self.add_widget(left_box)
-        self.add_widget(self.project_btn)
+        time_row = BoxLayout(
+            size_hint_y=None,
+            height=dp(22),
+            spacing=dp(6)
+        )
+
+        self.time_label = Label(
+            text=time.strftime('%H:%M'),
+            color=(1, 1, 1, 1),
+            halign='right',
+            valign='middle',
+            font_size='18sp',
+            bold=True
+        )
+        self.time_label.bind(size=self.time_label.setter('text_size'))
+
+        time_row.add_widget(self.time_label)
+
+        self.date_label = Label(
+            text=self._get_full_date(),
+            color=(1, 1, 1, 0.9),
+            halign='right',
+            valign='top',
+            font_size='12sp',
+            size_hint_y=None,
+            height=dp(16)
+        )
+        self.date_label.bind(size=self.date_label.setter('text_size'))
+
+        right_box.add_widget(time_row)
+        right_box.add_widget(self.date_label)
+
+        self.add_widget(right_box)
+
+        Clock.schedule_interval(self._update_time, 1)
+
+    def _get_weekday(self):
+        weekdays = ['Понедельник', 'Вторник', 'Среда', 'Четверг', 'Пятница', 'Суббота', 'Воскресенье']
+        return weekdays[datetime.now().weekday()]
+
+    def _get_full_date(self):
+        months = ['Января', 'Февраля', 'Марта', 'Апреля', 'Мая', 'Июня',
+                  'Июля', 'Августа', 'Сентября', 'Октября', 'Ноября', 'Декабря']
+        now = datetime.now()
+        return f"{now.day} {months[now.month - 1]} {now.year} года"
+
+    def _update_time(self, dt):
+        self.time_label.text = self._get_weekday() + " " + time.strftime('%H:%M')
+        self.date_label.text = self._get_full_date()
 
     def _upd(self, *a):
         self._bg_rect.pos = self.pos
         self._bg_rect.size = self.size
         self._round.pos = self.pos
         self._round.size = self.size
-
 
 class BottomBar(BoxLayout):
     def __init__(self):
@@ -143,7 +275,7 @@ class BottomBar(BoxLayout):
             self._bg = RoundedRectangle(pos=self.pos, size=self.size, radius=[18, 18, 0, 0])
         self.bind(pos=self._up, size=self._up)
         self.list_btn = RoundedBtn(text='Список задач', bg=(0.25, 0.55, 0.9, 1), radius=14, font_size='14sp')
-        self.settings_btn = RoundedBtn(text='⚙', bg=(0.66, 0.66, 0.66, 1), radius=12, size_hint_x=None, width=dp(52), font_size='20sp')
+        self.settings_btn = RoundedBtn(text='⚙', bg=(0.66, 0.66, 0.66, 1), radius=12, size_hint_x=None, width=dp(52), font_size='20sp', font_name='Emojis', bold=True)
 
         self.add_widget(self.list_btn)
         self.add_widget(self.settings_btn)
@@ -245,7 +377,7 @@ class TaskCard(BoxLayout):
 
         self._spacer = Widget(size_hint_x=None, width=dp(6))
         self._check = RoundedBtn(text='✓', bg=(0.25, 0.75, 0.4, 1), radius=12, size_hint_x=None, width=dp(48),
-                                 font_size='20sp')
+                                 font_size='20sp', font_name='Emojis')
         def _on_finish(instance):
             from datetime import datetime
             now_ts = int(datetime.now().timestamp())
@@ -299,48 +431,39 @@ class TaskCard(BoxLayout):
         self._layout()
 
     def _set_time_text(self):
-            all_tasks = taskManager.get_tasks() or []
+            all_tasks = taskManager.get_tasks()
             self._time.text = self.get_task_time_display(all_tasks[self._task_id])
 
-    def get_task_time_display(self, task: dict) -> str:
+    @staticmethod
+    def get_task_time_display(task: dict) -> str:
         now_ts = int(datetime.now().timestamp())
 
         if task["state"] in ("completed", "completed_overdue"):
             completed_ts = task.get("completed_time")
             if not completed_ts:
                 return "-"
-            display = datetime.fromtimestamp(completed_ts).strftime("%d.%m %H:%M")
+            display = f"Завершено {datetime.fromtimestamp(completed_ts).strftime('%d.%m %H:%M')}"
             if task["state"] == "completed_overdue":
                 overdue_sec = completed_ts - task["end_time"]
                 if overdue_sec > 0:
-                    display += f" просрочено на {format_duration(overdue_sec)}"
+                    display += f" +{format_duration(overdue_sec)}"
             return display
 
         elif task["state"] == "active":
             deadline_ts = task["end_time"]
             delta = deadline_ts - now_ts
             if delta < 0:
-                return f"Просрочено на {format_duration(now_ts - deadline_ts)}"
-            if is_same_day(now_ts, deadline_ts):
-                return format_duration(delta)
-            else:
-                return datetime.fromtimestamp(deadline_ts).strftime("%d.%m %H:%M")
-
+                return f"Просрочено {format_duration(now_ts - deadline_ts)}"
+            return f"Осталось {format_duration(delta)}"
 
         elif task["state"] == "next":
             start_ts = task["start_time"]
-            if is_same_day(now_ts, start_ts):
-                delta = start_ts - now_ts
-                if delta > 0:
-                    return f"должно начаться {format_duration(delta)}"
-                elif delta < 0:
-                    return f"должно было начаться {format_duration(-delta)} назад"
-                else:
-                    return "Сейчас"
-
-            else:
-
-                return datetime.fromtimestamp(start_ts).strftime("%d.%m %H:%M")
+            delta = start_ts - now_ts
+            if delta > 0:
+                return f"Начало через {format_duration(delta)}"
+            elif delta < 0:
+                return f"Опоздание {format_duration(-delta)}"
+            return "Начало сейчас"
 
         return "-"
 
@@ -650,12 +773,14 @@ class STaskCard(FloatLayout):
         self.main_container.add_widget(self.expanded_content)
 
         self.edit_btn = RoundedBtn(text='✎', bg=(0.3, 0.6, 0.9, 1), radius=[12, 0, 0, 12], size_hint=(None, None),
-                                   size=(dp(80), self._compact_h), font_size='24sp', pos=(0, 0))
+                                   size=(dp(80), self._compact_h), font_size='24sp', pos=(0, 0), font_name='Emojis')
         self.edit_btn.opacity = 0
+        self.edit_btn.bind(on_release=self._on_edit)
 
         self.delete_btn = RoundedBtn(text='🗑', bg=(0.9, 0.3, 0.3, 1), radius=[0, 12, 12, 0], size_hint=(None, None),
-                                     size=(dp(80), self._compact_h), font_size='24sp', pos=(0, 0))
+                                     size=(dp(80), self._compact_h), font_size='24sp', pos=(0, 0), font_name='Emojis')
         self.delete_btn.opacity = 0
+        self.delete_btn.bind(on_release=self._on_delete)
 
         self.add_widget(self.edit_btn)
         self.add_widget(self.delete_btn)
@@ -665,6 +790,48 @@ class STaskCard(FloatLayout):
         self._swipe_full = dp(80) - self._swipe_gap
         Clock.schedule_once(self._post, 0)
         self.bind(size=self._layout, pos=self._layout)
+
+    def _on_edit(self, instance):
+        task = taskManager.get_tasks()[self._task_id]
+        app = MDApp.get_running_app()
+        if app and hasattr(app, 'root_layout'):
+            app.root_layout.show_task_editor(task=task, task_id=self._task_id)
+        self._animate_swipe_close()
+
+    def _on_delete(self, instance):
+        if not hasattr(self, '_delete_dialog') or self._delete_dialog is None:
+            self._delete_dialog = MDDialog(
+                title="Удаление задачи",
+                text=f"Вы уверены, что хотите удалить задачу '{self._title}'?",
+                buttons=[
+                    MDFlatButton(
+                        text="ОТМЕНА",
+                        on_release=lambda x: self._cancel_delete()
+                    ),
+                    MDFlatButton(
+                        text="УДАЛИТЬ",
+                        theme_text_color="Custom",
+                        text_color=(0.9, 0.3, 0.3, 1),
+                        on_release=lambda x: self._confirm_delete()
+                    ),
+                ],
+            )
+        else:
+            self._delete_dialog.text = f"Вы уверены, что хотите удалить задачу '{self._title}'?"
+
+        self._delete_dialog.open()
+
+    def _cancel_delete(self):
+        self._delete_dialog.dismiss()
+        self._animate_swipe_close()
+
+    def _confirm_delete(self):
+        self._delete_dialog.dismiss()
+        taskManager.delete_task(self._task_id)
+        app = MDApp.get_running_app()
+        if app and hasattr(app, 'refresh_tasks'):
+            app.refresh_tasks()
+        self._animate_swipe_close()
 
     def _post(self, dt):
         self._update_state_visuals()
@@ -693,7 +860,7 @@ class STaskCard(FloatLayout):
         overdue_sec_two = max(0, now_ts - end_ts) if now_ts and end_ts else None
 
         if state in ("completed", "completed_overdue"):
-            text = datetime.fromtimestamp(completed_ts).strftime(
+            text = "Завершено " + datetime.fromtimestamp(completed_ts).strftime(
                 "%d.%m %H:%M") if completed_ts else datetime.fromtimestamp(end_ts).strftime("%d.%m %H:%M")
             if state == "completed_overdue" and overdue_sec:
                 text += f"\n+{format_duration(overdue_sec)}"
@@ -702,12 +869,17 @@ class STaskCard(FloatLayout):
 
         if state == "active":
             delta = end_ts - now_ts
-            self.time_lbl.text = format_duration(delta) if delta > 0 else f"Просрочено на {format_duration(overdue_sec_two)}"
+            self.time_lbl.text = "До " + format_duration(delta) if delta > 0 else f"Просрочено на {format_duration(overdue_sec_two)}"
             return
 
         if state == "next":
             delta = start_ts - now_ts
-            self.time_lbl.text = format_duration(delta) if delta > 0 else "Сейчас"
+            if delta > 0:
+                self.time_lbl.text = format_duration(delta)
+            elif delta < 0:
+                self.time_lbl.text = f"опоздание {format_duration(-delta)}"
+            else:
+                self.time_lbl.text = "Совсем скоро начнётся"
             return
 
     def _layout(self, *a):
@@ -815,21 +987,23 @@ class STaskCard(FloatLayout):
             dx = touch.x - self._touch_start_x
             dy = touch.y - self._touch_start_y
 
+            # если вы это заметили то не реагируйте на это, это рудимент.
+            # РУДИМЕНТ
             if not self._is_swiping and abs(dx) > dp(10):
                 if abs(dx) > abs(dy) * 1.5:
                     self._is_swiping = True
+            # РУДИМЕНТ
 
-            if self._is_swiping:
-                if dx > 0:
-                    self._swipe_offset = min(dx, self._swipe_full)
-                    self.edit_btn.opacity = self._swipe_offset / dp(80)
-                    self.delete_btn.opacity = 0
-                else:
-                    self._swipe_offset = max(dx, -self._swipe_full)
-                    self.delete_btn.opacity = abs(self._swipe_offset) / dp(80)
-                    self.edit_btn.opacity = 0
-                self._layout()
-                return True
+            if dx > 0:
+                self._swipe_offset = min(dx, self._swipe_full)
+                self.edit_btn.opacity = self._swipe_offset / dp(80)
+                self.delete_btn.opacity = 0
+            else:
+                self._swipe_offset = max(dx, -self._swipe_full)
+                self.delete_btn.opacity = abs(self._swipe_offset) / dp(80)
+                self.edit_btn.opacity = 0
+            self._layout()
+            return True
         return super().on_touch_move(touch)
 
     def on_touch_up(self, touch):
@@ -914,8 +1088,7 @@ class TaskListPanel(BoxLayout):
 
         self.bind(pos=self._upd, size=self._upd)
 
-        header = BoxLayout(size_hint_y=None, height=dp(56))
-        headerKostyl = BoxLayout(size_hint_y=None, height=dp(56), padding=[dp(16), 0])
+        header = BoxLayout(size_hint_y=None, height=dp(56),padding=[dp(16), 4], spacing=dp(8))
         title = Label(
             text='[b]Список задач[/b]',
             markup=True,
@@ -925,28 +1098,28 @@ class TaskListPanel(BoxLayout):
             font_size='18sp'
         )
         title.bind(size=title.setter('text_size'))
-        headerKostyl.add_widget(title)
-        header.add_widget(headerKostyl)
+        header.add_widget(title)
 
-        right_box = BoxLayout(size_hint_x=None, height=dp(56), width=dp(120), spacing=dp(8), padding=[dp(8), 0])
-        add_btn = RoundedBtn(text='+', bg=(0.25, 0.6, 0.95, 1), radius=12, size_hint_x=None, font_size='20sp')
+        right_box = BoxLayout(size_hint_x=None, height=dp(56), width=dp(120), spacing=dp(8), padding=[dp(0), 0])
+
+        add_btn = RoundedBtn(text='➕', bg=(0.25, 0.6, 0.95, 1), radius=12, size_hint_x=None, font_size='20sp', font_name='Emojis', bold=True)
         add_btn.bind(height=lambda i, v: setattr(i, 'width', v))
         add_btn.bind(on_release=lambda *_: self.parent.show_task_editor())
-        close_btn = RoundedBtn(text='X', bg=(0.7, 0.7, 0.7, 1), radius=12, size_hint_x=None, font_size='20sp')
+
+
+        close_btn = RoundedBtn(text='❌', bg=(0.7, 0.7, 0.7, 1), radius=12, size_hint_x=None, font_size='20sp', font_name='Emojis', bold=True)
         close_btn.bind(height=lambda instance, value: setattr(instance, 'width', value))
 
-        right_box.add_widget(add_btn)
-        right_box.add_widget(close_btn)
+        header.add_widget(add_btn)
+        header.add_widget(close_btn)
 
-        header.add_widget(right_box)
+        # header.add_widget(right_box)
         self.add_widget(header)
 
         self._close_btn = close_btn
         self._add_btn = add_btn
 
-        from kivy.app import App
-        from kivy.clock import Clock
-        self._add_btn.bind(on_release=lambda *a: Clock.schedule_once(lambda dt: App.get_running_app().root.show_task_editor_new(), 0))
+        self._add_btn.bind(on_release=lambda *a: Clock.schedule_once(lambda dt: MDApp.get_running_app().root.show_task_editor_new(), 0))
 
         self.scroll = ScrollView(size_hint=(1, 1), bar_width=dp(4), do_scroll_x=False)
         self.container = BoxLayout(
@@ -1003,8 +1176,6 @@ class TaskListPanel(BoxLayout):
             self.container.add_widget(card)
 
 
-
-
 class TaskEditorPanel(BoxLayout):
     def __init__(self, root, task=None, task_id=None):
         super().__init__(orientation='vertical')
@@ -1018,7 +1189,7 @@ class TaskEditorPanel(BoxLayout):
 
         self.bind(pos=self._upd, size=self._upd)
 
-        header = BoxLayout(size_hint_y=None, height=dp(56), padding=[dp(16), 0], spacing=dp(8))
+        header = BoxLayout(size_hint_y=None, height=dp(56), padding=[dp(16), 4], spacing=dp(8))
         title = Label(
             text='[b]Редактирование задачи[/b]' if task else '[b]Новая задача[/b]',
             markup=True,
@@ -1028,16 +1199,17 @@ class TaskEditorPanel(BoxLayout):
         )
         title.bind(size=title.setter('text_size'))
 
-        save_btn = RoundedBtn(text='✓', bg=(0.3, 0.6, 0.3, 1), radius=12, size_hint_x=None)
-        save_btn.bind(height=lambda i, v: setattr(i, 'width', v))
-        save_btn.bind(on_release=self._save)
+        self.save_btn = RoundedBtn(text='✔️', bg=(0.5, 0.5, 0.5, 1), radius=12, size_hint_x=None, font_name='Emojis', bold=True)
+        self.save_btn.bind(height=lambda i, v: setattr(i, 'width', v))
+        self.save_btn.bind(on_release=self._save)
+        self.save_btn.disabled = True
 
-        close_btn = RoundedBtn(text='X', bg=(0.7, 0.7, 0.7, 1), radius=12, size_hint_x=None)
+        close_btn = RoundedBtn(text='❌', bg=(0.7, 0.7, 0.7, 1), radius=12, size_hint_x=None, font_name='Emojis', bold=True)
         close_btn.bind(height=lambda i, v: setattr(i, 'width', v))
         close_btn.bind(on_release=self._close)
 
         header.add_widget(title)
-        header.add_widget(save_btn)
+        header.add_widget(self.save_btn)
         header.add_widget(close_btn)
         self.add_widget(header)
 
@@ -1049,6 +1221,10 @@ class TaskEditorPanel(BoxLayout):
         self.project_input = self._field(content, 'Проект', self.task.get('project', ''))
         self.desc_input = self._field(content, 'Описание', self.task.get('description', ''), multiline=True, h=dp(96))
 
+        self.title_input.bind(text=self._check_validation)
+        self.project_input.bind(text=self._check_validation)
+        self.desc_input.bind(text=self._check_validation)
+
         self.start_time = self.task.get('start_time')
         self.end_time = self.task.get('end_time')
 
@@ -1058,24 +1234,42 @@ class TaskEditorPanel(BoxLayout):
         scroll.add_widget(content)
         self.add_widget(scroll)
 
-    def _field(self, parent, text, value, multiline=False, h=dp(44)):
-        box = BoxLayout(orientation='vertical', size_hint_y=None)
-        box.height = h + dp(20)
+        self._check_validation()
 
-        lbl = Label(text=text, size_hint_y=None, height=dp(20), halign='left', valign='middle', color=(0,0,0,1))
+    def _field(self, parent, text, value, multiline=False, h=dp(96)):
+        box = BoxLayout(orientation='vertical', size_hint_y=None, spacing=dp(4))
+
+        lbl = Label(text=text, size_hint_y=None, height=dp(20), halign='left',
+                    valign='middle', color=(0, 0, 0, 1), font_size='14sp')
         lbl.bind(size=lbl.setter('text_size'))
 
-        inp = TextInput(text=value, size_hint_y=None, height=h, multiline=multiline)
+        inp = MDTextField(
+            hint_text=text,
+            mode="rectangle",
+            size_hint_y=None,
+            multiline=multiline
+        )
 
-        box.add_widget(lbl)
+        if multiline:
+            inp.height = h
+            inp.max_height = h
+            box.height = h + dp(24)
+        else:
+            inp.height = dp(56)
+            box.height = dp(80)
+
+        # box.add_widget(lbl)
         box.add_widget(inp)
         parent.add_widget(box)
+
+        Clock.schedule_once(lambda dt: setattr(inp, 'text', value), 0)
+
         return inp
 
     def _time_btn(self, parent, text, value, callback):
         box = BoxLayout(orientation='vertical', size_hint_y=None, height=dp(64))
 
-        lbl = Label(text=text, size_hint_y=None, height=dp(20), halign='left', valign='middle', color=(0,0,0,1))
+        lbl = Label(text=text, size_hint_y=None, height=dp(20), halign='left', valign='middle', color=(0, 0, 0, 1))
         lbl.bind(size=lbl.setter('text_size'))
 
         btn = RoundedBtn(
@@ -1088,6 +1282,21 @@ class TaskEditorPanel(BoxLayout):
         box.add_widget(btn)
         parent.add_widget(box)
         return btn
+
+    def _check_validation(self, *args):
+        is_valid = (
+                self.title_input.text.strip() != '' and
+                self.project_input.text.strip() != '' and
+                self.desc_input.text.strip() != '' and
+                self.start_time is not None and
+                self.end_time is not None
+        )
+
+        self.save_btn.disabled = not is_valid
+        if is_valid:
+            self.save_btn.bg = (0.3, 0.6, 0.3, 1)
+        else:
+            self.save_btn.bg = (0.5, 0.5, 0.5, 1)
 
     def _pick_start(self, *_):
         picker = MDDatePicker()
@@ -1102,6 +1311,7 @@ class TaskEditorPanel(BoxLayout):
     def _set_start(self, date, t):
         self.start_time = int(time.mktime(date.timetuple())) + t.hour * 3600 + t.minute * 60
         self.start_btn.text = time.strftime('%d.%m.%Y %H:%M', time.localtime(self.start_time))
+        self._check_validation()
 
     def _pick_end(self, *_):
         picker = MDDatePicker()
@@ -1116,20 +1326,12 @@ class TaskEditorPanel(BoxLayout):
     def _set_end(self, date, t):
         self.end_time = int(time.mktime(date.timetuple())) + t.hour * 3600 + t.minute * 60
         self.end_btn.text = time.strftime('%d.%m.%Y %H:%M', time.localtime(self.end_time))
+        self._check_validation()
 
     def _save(self, *_):
-        data = {
-            "title": self.title_input.text,
-            "project": self.project_input.text,
-            "description": self.desc_input.text,
-            "start_time": self.start_time,
-            "end_time": self.end_time,
-            "started": False,
-            "state": "next",
-            "completed_time": None,
-            "reminders_sent": {},
-            "missed_notifications": {}
-        }
+        if not self.title_input.text.strip() or not self.project_input.text.strip() or \
+                not self.desc_input.text.strip() or self.start_time is None or self.end_time is None:
+            return
 
         if self.task_id is None:
             taskManager.add_task(
@@ -1140,12 +1342,219 @@ class TaskEditorPanel(BoxLayout):
                 end_time=self.end_time,
                 started=False,
                 state="next"
-        )
+            )
         else:
-            taskManager.edit_task(self.task_id, data)
+            taskManager.edit_task(
+                self.task_id,
+                title=self.title_input.text,
+                project=self.project_input.text,
+                description=self.desc_input.text,
+                start_time=self.start_time,
+                end_time=self.end_time
+            )
 
         self.root.update_all_task_cards()
         self._close()
+
+    def _close(self, *_):
+        anim = Animation(y=-self.height, duration=0.25, transition='in_cubic')
+        anim.bind(on_complete=lambda *_: self.root.remove_widget(self))
+        anim.start(self)
+
+    def _upd(self, *_):
+        self._bg.pos = self.pos
+        self._bg.size = self.size
+
+
+def get_settings_file():
+    app = MDApp.get_running_app()
+    if app:
+        return os.path.join(app.user_data_dir, "settings.json")
+    return os.path.join(os.path.expanduser("~"), "settings.json")
+
+
+def load_settings():
+    if os.path.exists(get_settings_file()):
+        try:
+            with open(get_settings_file(), "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return {"notifications_enabled": True}
+    return {"notifications_enabled": True}
+
+
+def save_settings(settings):
+    with open(get_settings_file(), "w", encoding="utf-8") as f:
+        json.dump(settings, f, ensure_ascii=False, indent=4)
+
+
+def is_notifications_enabled():
+    return load_settings().get("notifications_enabled", True)
+
+
+class SettingsPanel(BoxLayout):
+    title = ''
+    def __init__(self, root):
+        super().__init__(orientation='vertical')
+        with self.canvas.before:
+            Color(0.95, 0.96, 0.98, 1)
+            self._bg = RoundedRectangle(pos=self.pos, size=self.size, radius=[dp(16), dp(16), 0, 0])
+
+        self.bind(pos=self._upd, size=self._upd)
+        self.root = root
+        self.settings = load_settings()
+
+        header = BoxLayout(size_hint_y=None, height=dp(56), padding=[dp(16), 4], spacing=dp(8))
+        _title = Label(
+            text='[b]Настройки[/b]',
+            markup=True,
+            halign='left',
+            valign='middle',
+            color=(0, 0, 0, 1),
+            font_size='18sp'
+        )
+        _title.bind(size=_title.setter('text_size'))
+
+        close_btn = RoundedBtn(text='❌', bg=(0.7, 0.7, 0.7, 1), radius=12, size_hint_x=None, font_name='Emojis',
+                               bold=True)
+        close_btn.bind(height=lambda i, v: setattr(i, 'width', v))
+        close_btn.bind(on_release=self._close)
+
+        header.add_widget(_title)
+        header.add_widget(close_btn)
+        self.add_widget(header)
+
+        scroll = ScrollView()
+        content = BoxLayout(orientation='vertical', size_hint_y=None, padding=[dp(20), dp(20)], spacing=dp(16))
+        content.bind(minimum_height=content.setter('height'))
+
+        section_label = Label(
+            text='[b]Уведомления[/b]',
+            markup=True,
+            size_hint_y=None,
+            height=dp(30),
+            halign='left',
+            valign='middle',
+            color=(0.3, 0.3, 0.3, 1),
+            font_size='14sp'
+        )
+        section_label.bind(size=section_label.setter('text_size'))
+        content.add_widget(section_label)
+
+        switch_card = BoxLayout(
+            orientation='horizontal',
+            size_hint_y=None,
+            height=dp(64),
+            padding=[dp(16), dp(12), dp(28), dp(12)],
+            spacing=dp(16)
+        )
+
+        with switch_card.canvas.before:
+            Color(1, 1, 1, 1)
+            switch_card._bg = RoundedRectangle(pos=switch_card.pos, size=switch_card.size, radius=[12])
+        switch_card.bind(
+            pos=lambda w, v: setattr(switch_card._bg, 'pos', v),
+            size=lambda w, v: setattr(switch_card._bg, 'size', v)
+        )
+
+        label_box = BoxLayout(orientation='vertical', spacing=dp(2))
+        notif_label = Label(
+            text='Включить уведомления',
+            halign='left',
+            valign='bottom',
+            color=(0.1, 0.1, 0.1, 1),
+            font_size='16sp',
+            size_hint_y=None,
+            height=dp(20)
+        )
+        notif_label.bind(size=notif_label.setter('text_size'))
+
+        notif_desc = Label(
+            text='Получать напоминания о задачах',
+            halign='left',
+            valign='top',
+            color=(0.5, 0.5, 0.5, 1),
+            font_size='12sp',
+            size_hint_y=None,
+            height=dp(16)
+        )
+        notif_desc.bind(size=notif_desc.setter('text_size'))
+
+        label_box.add_widget(notif_label)
+        label_box.add_widget(notif_desc)
+
+        self.notif_switch = MDSwitch(
+            size_hint=(None, None),
+            size=(dp(36), dp(48))
+        )
+        Clock.schedule_once(lambda dt: setattr(self.notif_switch, 'active', self.settings.get("notifications_enabled", True)), 0.1)
+        self.notif_switch.bind(active=self._on_notif_toggle)
+
+        switch_card.add_widget(label_box)
+        switch_card.add_widget(self.notif_switch)
+        content.add_widget(switch_card)
+
+        scroll.add_widget(content)
+        self.add_widget(scroll)
+
+        footer = BoxLayout(
+            size_hint_y=None,
+            height=dp(80),
+            orientation='vertical',
+            padding=[dp(20), dp(12)]
+        )
+
+        with footer.canvas.before:
+            Color(0.92, 0.93, 0.95, 1)
+            footer._bg = Rectangle(pos=footer.pos, size=footer.size)
+        footer.bind(
+            pos=lambda w, v: setattr(footer._bg, 'pos', v),
+            size=lambda w, v: setattr(footer._bg, 'size', v)
+        )
+
+        app_name = Label(
+            text='[b]Max TimeManagement[/b]',
+            markup=True,
+            halign='center',
+            valign='bottom',
+            color=(0.22, 0.5, 0.9, 1),
+            font_size='14sp',
+            size_hint_y=None,
+            height=dp(18)
+        )
+        app_name.bind(size=app_name.setter('text_size'))
+
+        author = Label(
+            text='Автор: Mega4oSS',
+            halign='center',
+            valign='middle',
+            color=(0.4, 0.4, 0.4, 1),
+            font_size='12sp',
+            size_hint_y=None,
+            height=dp(16)
+        )
+        author.bind(size=author.setter('text_size'))
+
+        year = Label(
+            text='2025 год',
+            halign='center',
+            valign='top',
+            color=(0.5, 0.5, 0.5, 1),
+            font_size='11sp',
+            size_hint_y=None,
+            height=dp(14)
+        )
+        year.bind(size=year.setter('text_size'))
+
+        footer.add_widget(app_name)
+        footer.add_widget(author)
+        footer.add_widget(year)
+
+        self.add_widget(footer)
+
+    def _on_notif_toggle(self, instance, value):
+        self.settings["notifications_enabled"] = value
+        save_settings(self.settings)
 
     def _close(self, *_):
         anim = Animation(y=-self.height, duration=0.25, transition='in_cubic')
@@ -1196,7 +1605,19 @@ class RootLayout(FloatLayout):
         self.bottom_bar.list_btn.bind(on_release=self._show_task_list)
         self.task_list._close_btn.bind(on_release=self._hide_task_list)
 
+        self.bottom_bar.settings_btn.bind(on_release=self._show_settings)
         self.bind(height=self._update_task_list_position)
+
+    def _show_settings(self, *args):
+        panel = SettingsPanel(root=self)
+        panel.size_hint = (1, 1)
+        panel.size = (self.width, self.height)
+        panel.pos_hint = {'x': 0}
+        panel.y = -self.height
+        self.add_widget(panel)
+
+        anim = Animation(y=0, duration=0.3, transition='out_cubic')
+        anim.start(panel)
 
     def update_all_task_cards(self):
         self.task_list.refresh()
@@ -1243,6 +1664,8 @@ class RootLayout(FloatLayout):
 
 
 class MainApp(MDApp):
+    title = 'MAX Time Management'
+
     def build(self):
         self.root_layout = RootLayout()
         return self.root_layout

@@ -8,8 +8,11 @@ from kivy.clock import Clock
 from kivy.app import App
 from kivymd.app import MDApp
 
+from main import is_notifications_enabled
+
+
 def get_tasks_file():
-    app = App.get_running_app()
+    app = MDApp.get_running_app()
     if app:
         return os.path.join(app.user_data_dir, "tasks.json")
     # Fallback для инициализации до запуска app
@@ -25,6 +28,7 @@ def initialize():
     if not _initialized:
         load_tasks()
         _initialized = True
+    print(f"Tasks file location: {get_tasks_file()}")
 
 
 def load_tasks():
@@ -122,6 +126,10 @@ try:
     from plyer import notification as _plyer_notification
 
     def _notify(title, message):
+        # Проверяем, включены ли уведомления
+        if not is_notifications_enabled():
+            return
+
         try:
             _plyer_notification.notify(title=title, message=message)
         except Exception:
