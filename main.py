@@ -29,6 +29,7 @@ from kivymd.uix.button import MDFlatButton
 from kivymd.uix.dialog import MDDialog
 from kivymd.uix.pickers import MDTimePicker, MDDatePicker
 import logging
+from settings import is_notifications_enabled, load_settings, save_settings, get_settings_file
 
 from kivymd.uix.selectioncontrol import MDSwitch
 from kivymd.uix.textfield import MDTextField
@@ -1364,33 +1365,6 @@ class TaskEditorPanel(BoxLayout):
     def _upd(self, *_):
         self._bg.pos = self.pos
         self._bg.size = self.size
-
-
-def get_settings_file():
-    app = MDApp.get_running_app()
-    if app:
-        return os.path.join(app.user_data_dir, "settings.json")
-    return os.path.join(os.path.expanduser("~"), "settings.json")
-
-
-def load_settings():
-    if os.path.exists(get_settings_file()):
-        try:
-            with open(get_settings_file(), "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception:
-            return {"notifications_enabled": True}
-    return {"notifications_enabled": True}
-
-
-def save_settings(settings):
-    with open(get_settings_file(), "w", encoding="utf-8") as f:
-        json.dump(settings, f, ensure_ascii=False, indent=4)
-
-
-def is_notifications_enabled():
-    return load_settings().get("notifications_enabled", True)
-
 
 class SettingsPanel(BoxLayout):
     title = ''

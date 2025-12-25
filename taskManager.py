@@ -8,14 +8,13 @@ from kivy.clock import Clock
 from kivy.app import App
 from kivymd.app import MDApp
 
-from main import is_notifications_enabled
+from settings import is_notifications_enabled, load_settings, save_settings, get_settings_file
 
 
 def get_tasks_file():
     app = MDApp.get_running_app()
     if app:
         return os.path.join(app.user_data_dir, "tasks.json")
-    # Fallback для инициализации до запуска app
     return os.path.join(os.path.expanduser("~"), "tasks.json")
 
 tasks = []
@@ -23,7 +22,6 @@ tasks = []
 _initialized = False
 
 def initialize():
-    """Вызвать после инициализации приложения"""
     global _initialized
     if not _initialized:
         load_tasks()
