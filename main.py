@@ -40,8 +40,8 @@ import taskManager
 
 LabelBase.register(
     name='Emojis',
-    fn_regular='fonts/NotoSansSymbols2-Regular.ttf',
-    fn_bold='fonts/NotoEmoji-Regular.ttf'
+    fn_regular='assets/fonts/NotoSansSymbols2-Regular.ttf',
+    fn_bold='assets/fonts/NotoEmoji-Regular.ttf'
 )
 
 def exception_handler(exc_type, exc_value, exc_traceback):
