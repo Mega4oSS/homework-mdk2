@@ -36,12 +36,15 @@ from kivymd.uix.textfield import MDTextField
 
 logging.basicConfig(level=logging.DEBUG)
 
+BASEMENT_DIR = os.path.dirname(os.path.abspath(__file__))
+FONTS_DIR = os.path.join(BASEMENT_DIR, "assets", "fonts")
+
 import taskManager
 
 LabelBase.register(
     name='Emojis',
-    fn_regular='assets/fonts/NotoSansSymbols2-Regular.ttf',
-    fn_bold='assets/fonts/NotoEmoji-Regular.ttf'
+    fn_regular=os.path.join(FONTS_DIR, 'NotoSansSymbols2-Regular.ttf'),
+    fn_bold=os.path.join(FONTS_DIR, 'NotoEmoji-Regular.ttf')
 )
 
 def exception_handler(exc_type, exc_value, exc_traceback):
